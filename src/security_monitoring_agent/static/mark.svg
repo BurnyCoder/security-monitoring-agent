@@ -1,0 +1,2 @@
+<!-- Global: local Sentinel brand asset. Local: SVG geometry needs no external font or icon request; https://developer.mozilla.org/en-US/docs/Web/SVG. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="12" fill="#b5e9d4"/><path d="M20 8 30 12v8c0 6-5 10-10 13-5-3-10-7-10-13v-8Z" fill="none" stroke="#153d39" stroke-width="2"/><path d="m15 20 3.5 3.5 7-8" fill="none" stroke="#153d39" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg>

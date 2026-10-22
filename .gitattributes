@@ -1,0 +1,5 @@
+# Global: portable source files. Local: preserve LF scripts and keep report media binary.
+* text=auto eol=lf
+*.jpg binary
+*.png binary
+*.pdf binary

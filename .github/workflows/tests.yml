@@ -1,0 +1,38 @@
+# Global: reproducible Windows checks without provider credentials or paid inference.
+# Local: use fixture tests and Node's strict module parser; https://docs.astral.sh/uv/guides/integration/github/ .
+name: Tests # Short check name for pull-request status.
+
+on: # Run the same checks before and after integration.
+  push: # Validate every pushed functional unit.
+  pull_request: # Validate proposed changes without privileged pull_request_target execution.
+  workflow_dispatch: # Permit explicit manual reruns without supplying secrets.
+
+permissions: # No workflow step needs repository writes or provider credentials.
+  contents: read # Checkout and dependency installation require read access only.
+
+jobs: # One native Windows environment matches the production process lifecycle.
+  windows: # Process-tree cleanup is exercised on its actual supported platform.
+    runs-on: windows-latest # Use GitHub's maintained hosted Windows image.
+    timeout-minutes: 15 # A test hang must not consume an unbounded runner session.
+    env: # Disable automatic inference in any app factory constructed by tests.
+      SMA_AUTO_SCAN: "false" # Individual fixtures may still explicitly test scheduler behavior with mocked operations.
+    steps: # Install runtimes, reproduce dependencies, then verify backend and browser modules.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; https://github.com/actions/checkout .
+        with: # Source inspection is the only Git operation performed by tests.
+          persist-credentials: false # No Git token is left in the checked-out repository.
+      - name: Install uv and Python # uv creates the repository-local .venv from the lockfile.
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0; official uv setup action.
+        with: # Pin the package manager and requested interpreter family.
+          version: "0.13.5" # Version published in the current official integration guide.
+          python-version: "3.14" # Match the application's validated Windows interpreter family.
+      - name: Install locked dependencies # Fail instead of silently rewriting a stale lockfile.
+        run: uv sync --locked # Includes the default development dependency group.
+      - name: Run Python tests # Tests use synthetic source/provider fixtures, never live CLI authentication.
+        run: uv run --locked pytest -q # Keep dependency resolution fixed during execution too.
+      - name: Install Node for module checks # No npm packages or frontend build are required.
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0; https://github.com/actions/setup-node .
+        with: # Use a supported parser runtime and avoid unused package-manager caching.
+          node-version: "lts/*" # Follow the maintained Node LTS runtime for syntax verification.
+          package-manager-cache: false # There is no npm dependency graph in this project.
+      - name: Parse and link browser modules # SourceTextModule checks browser ES-module grammar without running app code.
+        run: node --experimental-vm-modules scripts/check_frontend.mjs # The script exits nonzero on parse/link failures.
