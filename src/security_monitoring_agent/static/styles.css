@@ -96,7 +96,9 @@ main { max-width:1800px; margin:auto; padding:32px 34px 18px; }
 .summary-icon { color:#6e9a78; font-size:24px; line-height:1; }
 .scan-summary>div { flex:1; min-width:0; }
 .scan-summary strong { font-size:11px; color:#486a51; font-weight:600; }
+.scan-summary strong+.badge { margin-left:8px; } /* Global: distinct latest-attempt outcome. Local: keep its badge near the summary title. */
 .scan-summary p { font-size:10px; line-height:1.6; color:#83947f; margin:3px 0 0; }
+.scan-success-date { display:block; margin-top:8px; font-size:10px; color:#6c8166; } /* Global: success is separate from recency. Local: show the actual fully completed scan timestamp, or its explicit absence. */
 .overview-grid { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:20px; align-items:start; }
 .main-column,.side-column,.stack { display:flex; flex-direction:column; gap:20px; min-width:0; }
 .panel { min-width:0; background:white; border:1px solid var(--line); border-radius:8px; overflow:hidden; box-shadow:var(--shadow); }

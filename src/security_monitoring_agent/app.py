@@ -12,7 +12,7 @@ from pathlib import Path  # Packaged templates and static assets live beside thi
 from typing import Literal  # Provider choices are fixed; model identifiers remain open.
 from urllib.parse import urlsplit  # Compare browser Origin with this same local server.
 
-from fastapi import FastAPI, HTTPException, Request  # Typed API, errors, and same-origin checks.
+from fastapi import FastAPI, HTTPException, Query, Request  # Typed API, errors, and same-origin checks.
 from fastapi.responses import FileResponse, JSONResponse  # Download complete logs and return validation errors.
 from fastapi.sse import EventSourceResponse, ServerSentEvent  # Native SSE provides heartbeats and framing.
 from fastapi.staticfiles import StaticFiles  # Serve local assets without third-party CDNs.
@@ -107,9 +107,11 @@ def create_app(root: Path | None = None) -> FastAPI:
         return monitor.store.findings()  # The frontend filters status, scope, severity and source.
 
     @app.get("/api/advisories", response_model=list[StoredAdvisory])
-    async def advisories():
+    async def advisories(news_days: int | None = Query(default=None, ge=1, le=30)):
         """Global: recent intelligence view. Local: preserve separately recorded publication/addition dates."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=load_settings(root).news_days)).isoformat()[:10]  # Compare ISO calendar dates safely.
+        if news_days is not None and news_days not in {1, 7, 30}:  # Query integers are parsed before restricting the supported window choices.
+            raise HTTPException(422, "news_days must be 1, 7, or 30")  # Do not silently reinterpret an unsupported interval.
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=news_days or load_settings(root).news_days)).isoformat()[:10]  # Quick filters do not mutate saved defaults.
         rows = monitor.store.advisories()  # Storage retains the complete baseline regardless of this view.
         return [row for row in rows if max([row.get(field, "")[:10] for field in ("published_at", "modified_at", "kev_added_at") if row.get(field)] or [row["observed_at"][:10]]) >= cutoff]  # Corrected or newly exploited older disclosures can be news.
 

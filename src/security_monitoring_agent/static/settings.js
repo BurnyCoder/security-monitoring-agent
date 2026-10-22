@@ -26,7 +26,7 @@ export function settingsView(settings, actions) {
   settings.project_roots.forEach(addRoot); // Render only configured folders.
   const save = el("button", { type: "submit", class: "button button-primary" }, "Save settings"); // One explicit save applies the entire configuration.
   const feedback = el("span", { class: "save-feedback", role: "status" }); // Report whether validation and persistence succeeded.
-  const diagnostics = el("div", { class: "diagnostics-content muted" }, "Check installed executables and provider authentication."); // Diagnostics run on demand.
+  const diagnostics = el("div", { class: "diagnostics-content muted" }, "Check installed executable versions. Inspect provider login status in its CLI."); // Version probes do not establish authentication or model access.
   const check = button("Check connections", async () => { // Global: actionable setup feedback. Local: inspect backend diagnostics without starting a scan.
     check.disabled = true; diagnostics.textContent = "Checking local tools…"; // Prevent redundant diagnostic requests.
     try { const data = await request("/diagnostics"); diagnostics.replaceChildren(el("pre", { class: "diagnostics-json" }, JSON.stringify(data, null, 2))); } // Preserve complete diagnostics instead of guessing their shape.

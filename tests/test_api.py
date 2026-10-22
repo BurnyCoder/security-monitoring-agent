@@ -1,6 +1,7 @@
 """Global: actual local HTTP workflow tests. Local: synthetic state and no live paid inference."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone  # Use relative dates so news-window assertions remain reproducible.
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from security_monitoring_agent.app import create_app
 from security_monitoring_agent.config import load_settings, save_settings
 from security_monitoring_agent.service import BusyError, Monitor
+from security_monitoring_agent.models import Advisory  # Reuse the actual persisted intelligence contract.
 
 
 @pytest.fixture
@@ -45,6 +47,16 @@ def test_public_api_has_named_response_contracts(client):
     schema = client.get("/openapi.json").json()  # Inspect the same contract available to local clients.
     for name in ("RunRecord", "StoredFinding", "ConversationDetail", "DashboardStatus"):
         assert name in schema["components"]["schemas"]  # Reject anonymous or missing public response shapes.
+
+
+def test_news_window_override_changes_view_without_mutating_settings(client):
+    """Global: quick news windows apply immediately. Local: persisted scheduler preferences stay explicit."""
+    published = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()  # Older than 24 hours but within seven days.
+    client.app.state.monitor.store.save_advisory(Advisory(id="test-news", title="Test", summary="Fixture", published_at=published))  # Use a source-date fixture without live inference.
+    assert client.get("/api/advisories?news_days=1").json() == []  # The quick window must affect the actual response.
+    assert len(client.get("/api/advisories?news_days=7").json()) == 1  # The stored record remains available in the broader window.
+    assert client.get("/api/advisories?news_days=5").status_code == 422  # Reject unsupported windows consistently.
+    assert client.get("/api/settings").json()["news_days"] == 7  # Viewing recent news never writes configuration.
 
 
 def test_sse_replays_large_events_from_cursor(client):

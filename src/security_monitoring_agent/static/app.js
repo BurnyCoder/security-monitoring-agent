@@ -6,7 +6,7 @@ import { settingsView } from "./settings.js"; // Isolate configuration form logi
 import { chatView } from "./chat.js"; // Isolate persisted conversation logic.
 
 const pages = { overview: ["Overview", "Security overview", "Fresh intelligence. Local evidence. A clear next step."], findings: ["Device findings", "Device findings", "Understand which vulnerabilities apply to your installed software."], intelligence: ["Threat intelligence", "Threat intelligence", "New vulnerabilities, exploitation reports, and the sources behind them."], inventory: ["Device inventory", "Device inventory", "Inspect exactly what was observed across Windows, WSL, and your projects."], history: ["Scan history", "Investigation history", "Trace each investigation from its first command to its final assessment."], chat: ["Ask an agent", "Ask your security agent", "Go deeper on the evidence, a proposed fix, or a question about your device."], settings: ["Settings", "Workspace settings", "Your agent, your schedule, and the scope of your investigations."] }; // Keep route copy in one place.
-const humanEventKinds = new Set(["phase", "progress", "agent_text", "agent_result", "state", "error", "done", "source"]); // Show readable investigation milestones by default; raw process streams remain available separately.
+const humanEventKinds = new Set(["phase", "progress", "agent_text", "agent_result", "state", "error", "done", "source", "coverage"]); // Show readable investigation milestones and coverage gaps by default; raw process streams remain available separately.
 const state = { status: null, settings: null, stream: null, streamId: null, logRunId: null, events: [], humanEvents: [], seen: new Set(), route: "overview", version: 0, chatId: null, findingId: null, busy: false, statusBusy: false, initialized: false, paintTimer: null }; // Keep only necessary view and live-run state.
 
 function showError(error) {
@@ -19,12 +19,18 @@ function syncSettings(settings) {
   state.settings = settings; document.querySelector("#scan-provider").value = settings.provider; document.querySelector("#scan-model").value = settings.model; document.querySelector("#scan-window").value = String(settings.news_days); // Leave model IDs unrestricted.
 }
 
+function loadSelectedNews() {
+  // Global: quick news-window changes affect displayed intelligence as well as the next scan. Local: use the typed read-only query without saving preferences.
+  const days = Number(document.querySelector("#scan-window").value); // Native choices match the API's 1/7/30-day vocabulary.
+  return request(`/advisories?news_days=${days}`); // Reuse one transport path for overview and intelligence views.
+}
+
 function updateStatus(status) {
   // Global: shared run lifecycle. Local: render summary controls without rebuilding forms or interrupting typing.
   state.status = status; const active = status.active_run; // Use server state as the authoritative worker status.
   document.querySelector("#connection").replaceChildren(el("span", { class: "device-dot" }), "Local workspace"); // Successful status requests prove the app connection.
   document.querySelector("#run-scan").disabled = Boolean((active && active.kind !== "chat") || state.busy); document.querySelector("#cancel-scan").hidden = !active; document.querySelector("#cancel-scan").textContent = active?.kind === "chat" ? "Stop agent" : "Stop scan"; // Scan and chat locks are independent, so a conversation never prevents a new scan.
-  document.querySelector("#scan-state").textContent = active ? (active.kind === "chat" ? "Agent is working" : "Investigation in progress") : status.last_successful ? `Last scan ${date(status.last_successful.finished_at)}` : "Ready for your first scan"; // Never label an unscanned device protected.
+  document.querySelector("#scan-state").textContent = active ? (active.kind === "chat" ? "Agent is working" : "Investigation in progress") : status.last_successful ? `Last fully successful scan ${date(status.last_successful.finished_at)}` : "Ready to scan"; // A partial or failed attempt must not be mistaken for an unscanned workspace.
   document.querySelector("#nav-findings").textContent = Number(status.counts?.affected || 0) + Number(status.counts?.potentially_affected || 0); // Count actionable installations in navigation.
   document.querySelector("#schedule-summary").textContent = !status.settings.auto_scan ? "Automatic scans paused" : status.next_scan_at ? `Next scan ${date(status.next_scan_at)}` : `Every ${status.settings.interval_minutes} minutes`; // Show the actual configured cadence.
   document.querySelector("#last-updated").textContent = `Workspace synced ${new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`; // Distinguish UI sync from evidence collection time.
@@ -81,9 +87,9 @@ async function renderRoute() {
   const target = document.querySelector("#view"); target.classList.add("is-loading"); // Keep existing content while the next route loads.
   try { // Fetch only the collections needed by the chosen route.
     let content; // One DOM result is mounted atomically after all dependent data arrives.
-    if (state.route === "overview") { const [findings, advisories, inventory] = await Promise.all([request("/findings"), request("/advisories"), request("/inventory")]); content = overview({ status: state.status, findings, advisories, inventory }, actions); } // Parallelize independent evidence reads.
+    if (state.route === "overview") { const [findings, advisories, inventory, runs] = await Promise.all([request("/findings"), loadSelectedNews(), request("/inventory"), request("/runs")]); content = overview({ status: state.status, findings, advisories, inventory, runs }, actions); } // Load the selected news window and latest scan attempt independently from fully successful history.
     else if (state.route === "findings") content = findingsView(await request("/findings"), actions); // Triage the complete findings list.
-    else if (state.route === "intelligence") { const advisories = await request("/advisories"); content = panel("Tracked intelligence", `${advisories.length} advisories · News recency is configured per scan`, newsList(advisories)); } // Keep intelligence distinct from exposure.
+    else if (state.route === "intelligence") { const advisories = await loadSelectedNews(); content = panel("Tracked intelligence", `${advisories.length} advisories · Last ${Number(document.querySelector("#scan-window").value)} day(s)`, newsList(advisories)); } // Keep selected intelligence recency distinct from persistent device exposure.
     else if (state.route === "inventory") content = inventoryView(await request("/inventory")); // Coverage and raw inventory share one snapshot.
     else if (state.route === "history") content = historyView(await request("/runs"), actions); // Include failed investigations and full logs.
     else if (state.route === "settings") content = settingsView(await request("/settings"), actions); // Use persisted values rather than stale quick-control overrides.
@@ -105,6 +111,7 @@ function bindControls() {
   // Global: one-time shell event wiring. Local: native event listeners keep behavior separate from HTML.
   document.querySelector("#run-scan").addEventListener("click", scan); // Dispatch the selected provider and model.
   document.querySelector("#scan-provider").addEventListener("change", (event) => { document.querySelector("#scan-model").value = event.target.value === "claude" ? "haiku" : "gpt-6-luna"; }); // Suggest each tested lightweight model.
+  document.querySelector("#scan-window").addEventListener("change", () => { if (state.initialized && ["overview", "intelligence"].includes(state.route)) renderRoute(); }); // Refresh only news-bearing views; ongoing runs, chat drafts, and settings forms retain their state.
   document.querySelector("#cancel-scan").addEventListener("click", async () => { const run = state.status?.active_run; if (!run) return; const control = document.querySelector("#cancel-scan"); control.disabled = true; try { await request(`/runs/${encodeURIComponent(run.id)}/cancel`, { method: "POST" }); await refreshStatus(); } catch (error) { showError(error); } finally { control.disabled = false; } }); // Cancel only the explicitly displayed active run.
   document.querySelector("#dismiss-error").addEventListener("click", () => { document.querySelector("#error-banner").hidden = true; }); // Dismiss presentation without hiding persisted failure records.
   document.querySelector("#close-drawer").addEventListener("click", closeDrawer); document.querySelector("#drawer-backdrop").addEventListener("click", closeDrawer); // Provide keyboard and pointer close controls.
