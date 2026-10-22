@@ -12,6 +12,7 @@ from .agents import run_agent  # Provider-specific details stay behind one inter
 from .collectors import collect_inventory  # Deterministic observations precede model assessment.
 from .evidence import validate_investigation  # Reject invalid certainty before committing findings.
 from .intelligence import collect_intelligence  # Reuse CISA and OSV implementations.
+from .intelligence.wsl_primary import check_wsl_primary_ranges  # Primary Microsoft ranges can contradict derived WSL applicability claims.
 from .models import Inventory, Investigation, Settings  # One final result schema for both agents.
 from .prompts import scan_prompt  # Versioned instructions stay separate from orchestration.
 from .storage import Store  # Durable state survives UI or server restarts.
@@ -106,9 +107,10 @@ async def run_scan(settings: Settings, root: Path, store: Store, run_id: str, em
     response = await run_agent(settings, prompt, workdir, emit, cancel, schema=strict_schema(Investigation.model_json_schema()))  # Stream all CLI events.
     result = Investigation.model_validate(response.structured) if response.structured is not None else Investigation.model_validate_json(response.text)  # Invalid final payload raises.
     validated, model_gap = await _storage_phase(_publishable_result, result, inventory, store)  # Validate and expose omitted or weakened model claims.
+    validated, primary_gap = await check_wsl_primary_ranges(validated, inventory, emit)  # Check remaining definitive WSL claims without lending evidence to structurally invalid originals.
     emit("phase", "Validating and publishing evidence")  # Progress text is separate from authoritative results.
     await _storage_phase(store.save_investigation, run_id, validated)  # Retain older unassessed occurrences as visibly stale without blocking requests.
-    incomplete = source_gap or model_gap or any(item.status != "ok" for item in inventory.coverage) or response.web_searches == 0  # Objective collection/research/validation gaps determine partial status.
+    incomplete = source_gap or model_gap or primary_gap or any(item.status != "ok" for item in inventory.coverage) or response.web_searches == 0  # Objective collection/research/validation gaps determine partial status.
     if response.web_searches == 0:  # A successful CLI answer alone does not prove actual web research.
         validated.coverage_notes.append("No live web-search event was observed; research checkpoint was not advanced.")  # Explain degraded capability.
     else:  # Update incremental cursor only after actual web research and valid structured output.

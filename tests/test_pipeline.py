@@ -7,6 +7,7 @@ import asyncio  # Exercise the same event loop used by the dashboard service.
 import threading  # A controlled blocking writer reveals event-loop stalls without a timing benchmark.
 from types import SimpleNamespace  # Supply only the provider response fields consumed by the pipeline.
 
+import httpx  # In-memory primary-source responses exercise WSL guard integration without external requests.
 import pytest  # Async tests and monkeypatching keep fixtures independent of installed agents.
 
 from security_monitoring_agent import pipeline  # Exercise the public scan wrapper with fake external phases.
@@ -130,3 +131,32 @@ async def test_workflow_status_uses_observed_gaps_not_every_note(monkeypatch, tm
     output = await pipeline.run_scan(Settings(), tmp_path, store, "run", lambda *_: None, asyncio.Event())  # Run the shared pipeline rather than duplicating status logic.
     assert output["status"] == expected and note in output["summary"]  # No free-text guessing or blanket notes-imply-partial rule.
     assert bool(store.get("meta", "research_checkpoint")) == bool(web_searches)  # Only an observed web-search event advances the cursor.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_applicability_evidence", [False, True])
+async def test_primary_wsl_guard_runs_after_structural_validation(monkeypatch, tmp_path, has_applicability_evidence):
+    """Global: publish WSL conflicts as partial without laundering weak evidence. Local: only already-supported definitive claims trigger the primary check."""
+    source = Source(title="Fixture", url="https://example.org/advisory")  # The advisory is independently publishable.
+    advisory = Advisory(id="CVE-2026-57968", title="Fixture", summary="Fixture", sources=[source])  # Use a valid CVE for exact repository URL construction.
+    finding = Finding(advisory_id=advisory.id, asset_id="fixture-app", status="affected", rationale="Fixture", evidence=["Observed applicability"] if has_applicability_evidence else [], sources=[source] if has_applicability_evidence else [])  # The weaker original must be downgraded before primary evidence is appended.
+    store = prepare_pipeline(monkeypatch, tmp_path, Investigation(summary="Fixture", advisories=[advisory], findings=[finding], coverage_notes=[]))  # Keep the actual pipeline publication path.
+    async def collect_wsl_inventory(*args):
+        """Global: select the narrow platform scope. Local: replace the default Windows-app fixture only."""
+        return Inventory(assets=[Asset(id="fixture-app", kind="wsl_platform", name="WSL", version="2.7.0.0", platform="Windows")])  # No real device inventory is used.
+    monkeypatch.setattr(pipeline, "collect_inventory", collect_wsl_inventory)  # The primary guard must discover an observed WSL platform asset.
+    requests = []  # Zero requests proves structural rejection happened before primary-source enrichment.
+    def respond(request):
+        """Global: supply an inverted primary range. Local: match the published CNA record shape with synthetic scope."""
+        requests.append(str(request.url))  # Count actual primary-check transport calls.
+        return httpx.Response(200, json={"cveMetadata": {"cveId": advisory.id, "state": "PUBLISHED"}, "containers": {"cna": {"providerMetadata": {"shortName": "microsoft"}, "affected": [{"vendor": "Microsoft", "product": "Windows Subsystem for Linux", "versions": [{"version": "5.0.0.0", "lessThan": "2.7.8", "versionType": "custom", "status": "affected"}]}]}}})  # No installed-version comparison is needed to expose the contradiction.
+    real_check = pipeline.check_wsl_primary_ranges  # Preserve the production guard while replacing only its transport.
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:  # No external web request is made by this integration test.
+        async def checked_primary(result, inventory, emit):
+            """Global: exercise the real primary guard. Local: inject the in-memory HTTP client."""
+            return await real_check(result, inventory, emit, client=client)  # Return the actual gap flag consumed by the pipeline.
+        monkeypatch.setattr(pipeline, "check_wsl_primary_ranges", checked_primary)  # Only transport ownership is replaced.
+        output = await pipeline.run_scan(Settings(), tmp_path, store, "run", lambda *_: None, asyncio.Event())  # Save the qualified result through real storage.
+    assert output["status"] == "partial" and store.findings()[0]["status"] == "potentially_affected"  # Both structural and primary-source gaps prevent definitive publication.
+    assert len(requests) == int(has_applicability_evidence)  # A primary record citation cannot rescue originally unsupported certainty.
+    assert ("WSL primary check downgraded" in output["summary"]) == has_applicability_evidence  # The summary reports the actual reason for qualification.

@@ -2,7 +2,7 @@
 
 The monitor records device/package facts, fetches known-exploitation intelligence, scans configured project dependencies, and gives that evidence to the selected agent for web research. Coverage is reported per collector, feed, distribution, and project. An unavailable source or failed command is an error or partial result; it is not evidence that the device is unaffected.
 
-A run marked `completed` means the configured workflow finished with no detected collector failure, missing live-search event, rejected record, or structurally unsupported definitive assessment. It does not guarantee exhaustive coverage, factual accuracy of agent conclusions, or that the device is unaffected. Those observable gaps produce `partial`; model-written coverage notes remain verbatim in the run summary and coverage log events, but arbitrary note text is not interpreted as a failure signal. This behavior is implemented in [the scan pipeline](../src/security_monitoring_agent/pipeline.py) and tested with synthetic results in [the pipeline tests](../tests/test_pipeline.py).
+A run marked `completed` means the configured workflow finished with no detected collector failure, missing live-search event, rejected record, structurally unsupported definitive assessment, or failed/conflicting WSL primary-range check. It does not guarantee exhaustive coverage, factual accuracy of agent conclusions, or that the device is unaffected. Those observable gaps produce `partial`; model-written coverage notes remain verbatim in the run summary and coverage log events, but arbitrary note text is not interpreted as a failure signal. This behavior is implemented in [the scan pipeline](../src/security_monitoring_agent/pipeline.py) and tested with synthetic results in [the pipeline tests](../tests/test_pipeline.py).
 
 ## Windows and WSL inventory
 
@@ -21,6 +21,10 @@ Only rows with status `installed` become package assets. Source package names an
 Missing OS metadata, malformed package rows, unsupported package managers, failed commands, and timeouts appear in coverage. Non-dpkg package managers, snaps, manually copied software, and arbitrary Python/Node environments are not enumerated. The WSL kernel/platform is kept separate from distro userland: the [Microsoft WSL2 kernel](https://github.com/microsoft/WSL2-Linux-Kernel) must not be treated as an ordinary Ubuntu kernel package.
 
 There is no custom deterministic Windows or Linux OS CVE matcher in this version. Agents assess inventory against cited vendor advisories. Upstream version comparisons alone are insufficient for distro packages because [Ubuntu backports security fixes](https://documentation.ubuntu.com/security/security-updates/).
+
+Definitive findings about an observed WSL **platform** asset receive one additional conditional primary-source check after structural evidence validation. For valid CVE IDs, the monitor fetches the exact published record from [CVEProject's official repository](https://github.com/CVEProject/cvelistV5), with an eight-second HTTP timeout and one cached attempt per CVE per scan. It examines only Microsoft CNA `affected` rows naming Windows Subsystem for Linux. Numeric dot-separated starting and upper bounds are compared as integer components with trailing zeros padded; inverted bounds or an empty exclusive interval reduce the finding to `potentially_affected`. Other version syntax is not interpreted. This follows the fields in the [CVE record schema](https://cveproject.github.io/cve-schema/schema/docs/); it does not compare an installed version or infer a corrected vendor range.
+
+Unavailable, mismatched, or missing Microsoft WSL primary evidence changes `affected` to `potentially_affected` and `not_affected` to `unknown`. Such failures and numeric conflicts produce a `partial` run, with the source URL, exact conflict or failure, uncertainty, and a coverage note retained. Ordinary source ranges preserve the existing assessment with an explicit check-scope caveat. A successful check only means no clearly conflicting numeric bounds were found; it does not verify applicability. Already-uncertain findings, distro packages, other asset kinds, and non-CVE identifiers do not trigger this check. The complete fetched response is retained in the local log.
 
 ## Known exploitation and web research
 
@@ -57,10 +61,12 @@ The automated collector/intelligence tests cover independent Windows installatio
 
 Pipeline tests verify that blocked inventory and investigation writes leave the event loop responsive, cancellation waits for an outstanding database worker, rejected or downgraded claims produce visible partial results, and ordinary model scope notes remain visible without automatically changing workflow status. Blocking database phases use [`asyncio.to_thread`](https://docs.python.org/3/library/asyncio-task.html#asyncio.to_thread); cancellation is reported after the active database worker finishes, so a cancelled run cannot continue writing after scan ownership is released.
 
+Primary WSL fixtures test inverted/empty numeric bounds, zero padding and numeric rather than string ordering, ordinary and non-numeric ranges, Microsoft CNA/product scope, exact CVE identity, HTTP failure, per-scan caching, source preservation, and no requests for out-of-scope findings. Pipeline integration also checks that primary-source enrichment cannot rescue a claim already weakened for missing applicability evidence.
+
 Run the focused checks with:
 
 ```powershell
-uv run pytest tests/test_collectors.py tests/test_intelligence.py tests/test_dependencies.py tests/test_pipeline.py
+uv run pytest tests/test_collectors.py tests/test_intelligence.py tests/test_dependencies.py tests/test_pipeline.py tests/test_wsl_primary.py
 ```
 
 Live run results belong in the experiment reports and timestamped local logs; the tests above use synthetic fixtures and are not measurements of real-world vulnerability-detection accuracy.
