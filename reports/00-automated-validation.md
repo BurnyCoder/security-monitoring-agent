@@ -24,16 +24,16 @@ These criteria are recorded after the debugging work; this is a retrospective en
 
 ## Method and observed results
 
-The validation commands ran from the repository root on native Windows AMD64 with Python 3.14.2 and Node.js 24.13.0. Python dependencies were already installed in the local `.venv`; `--no-sync` avoided changing the environment while collecting this result. Tests use isolated temporary state and synthetic source/provider records where appropriate. Process tests launch disposable Python helpers to exercise real pipe handling and termination. The suite does not invoke paid LLM requests or install real Windows scheduled tasks. See the [test sources](../tests) and [Windows CI configuration](../.github/workflows/tests.yml).
+The validation commands ran from the repository root on native Windows AMD64 with Python 3.14.2 and Node.js 24.13.0. Python dependencies were already installed in the local `.venv`; invoking that interpreter directly avoided changing the environment while collecting this result. Tests use isolated temporary state and synthetic source/provider records where appropriate. Process tests launch disposable Python helpers to exercise real pipe handling and termination. The suite does not invoke paid LLM requests or install real Windows scheduled tasks. See the [test sources](../tests) and [Windows CI configuration](../.github/workflows/tests.yml).
 
 ```powershell
-uv run --no-sync pytest -q
+.venv/Scripts/python.exe -m pytest -q
 node --experimental-vm-modules scripts/check_frontend.mjs
 ```
 
 | Check | Observed outcome | Interpretation |
 | --- | --- | --- |
-| Python suite | **86 passed in 7.84s**, exit code 0 | Final local run after news-window and Microsoft WSL primary-range regressions. All 86 collected cases passed, including parameterized cases; this is not 86 independent statistical observations. Earlier checkpoints were 56 passed in 7.77s and 66 passed in 7.23s. |
+| Python suite | **88 passed in 8.46s**, exit code 0 | Final local run after news-window and Microsoft WSL primary-range/news-caveat regressions. All 88 collected cases passed, including parameterized cases; this is not 88 independent statistical observations. Earlier checkpoints were 56 passed in 7.77s and 66 passed in 7.23s. |
 | Browser module check | **6 ECMAScript modules parsed and linked**, exit code 0 | `api.js`, `app.js`, `chat.js`, `settings.js`, `ui.js`, and `views.js` passed the strict parser/linker. DOM interaction and rendering are outside this check. |
 | Focused code review | **One pass completed**, followed by correction of identified issues | Review covered correctness, local control endpoints, maintainability, tests, process reliability, evidence identity, and architecture. This is not an exhaustive security audit. |
 | Browser layout checks | Parent session inspected desktop viewports at 815 px and the default 1,265 px, plus a 390 px mobile viewport; no page-level horizontal overflow was observed. | These are concrete viewport observations, not an exhaustive device/browser matrix. The initial JavaScript syntax failure was fixed before the overview loaded successfully. |

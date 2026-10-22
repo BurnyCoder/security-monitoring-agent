@@ -85,4 +85,12 @@ async def check_wsl_primary_ranges(result: Investigation, inventory: Inventory, 
             finding.status = "potentially_affected" if conflicts or previous == "affected" else "unknown"  # Never turn a failed primary check into a definitive clearance.
             incomplete = True  # Pipeline exposes this concrete evidence gap as partial.
             checked.coverage_notes.append(f"WSL primary check downgraded {identifier} / {finding.asset_id} from {previous} to {finding.status}: " + (failure or " ".join(conflicts)))  # Summary and coverage events disclose why the model's certainty was reduced.
+            caveat = f"Primary WSL check for {identifier}: " + (failure or " ".join(conflicts)) + " Definitive applicability requires verified, consistent primary evidence."  # News must disclose the same evidence gap as the associated occurrence.
+            for advisory in checked.advisories:  # Qualify all matching source IDs without rewriting their original summaries.
+                if identifier not in {advisory.id, *advisory.aliases}:  # Other news items do not inherit this CVE-specific uncertainty.
+                    continue  # Preserve unrelated advisory content.
+                if caveat not in advisory.summary:  # Multiple installations of the same CVE require only one news caveat.
+                    advisory.summary += "\n\n" + caveat  # Append the exact primary-check limitation while retaining the original source claim.
+                if not any(source.url == url for source in advisory.sources):  # Repeated occurrences must not duplicate citation links.
+                    advisory.sources.append(Source(title=title, url=url))  # Failed retrieval remains clearly labeled as an unavailable check.
     return checked, incomplete  # Ordinary vendor ranges retain their prior status with an explicit structural caveat.

@@ -7,7 +7,7 @@ import httpx  # MockTransport exercises real HTTP response and failure handling 
 import pytest  # Parameterized fixtures distinguish inverted bounds from ordinary source ranges.
 
 from security_monitoring_agent.intelligence.wsl_primary import check_wsl_primary_ranges, cve_record_url, numeric_range_conflicts
-from security_monitoring_agent.models import Asset, Finding, Inventory, Investigation, Source
+from security_monitoring_agent.models import Advisory, Asset, Finding, Inventory, Investigation, Source
 
 
 def primary_record(lower="5.0.0.0", upper="2.7.8", bound="lessThan"):
@@ -111,3 +111,21 @@ async def test_non_definitive_and_non_wsl_findings_do_not_fetch():
     async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected)) as client:  # An unused transport proves the no-op path.
         checked, incomplete = await check_wsl_primary_ranges(result, inventory, lambda *_: None, client=client)  # The helper preserves unrelated findings.
     assert not incomplete and checked == result  # No opportunistic inspection or speculative downgrade.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_matching_news_keeps_original_summary_and_one_primary_caveat(unavailable):
+    """Global: news and occurrence certainty must agree. Local: repeated findings append one caveat and source per matching advisory."""
+    result, inventory = finding_input(count=2)  # Two occurrences share the same CVE and primary-source observation.
+    original_summary = "A derived source reports the package range below 2.7.8."  # Preserve the original claim so the qualification is auditable.
+    result.advisories = [Advisory(id="GHSA-fixture", aliases=["CVE-2026-57968"], title="Fixture", summary=original_summary)]  # Match a source advisory through its CVE alias as well as a canonical ID.
+    response = httpx.Response(503, text="Fixture unavailable") if unavailable else httpx.Response(200, json=primary_record())  # Both failed verification and numeric contradiction need a visible news caveat.
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: response)) as client:  # No real network request or stored advisory mutation.
+        checked, incomplete = await check_wsl_primary_ranges(result, inventory, lambda *_: None, client=client)  # Exercise the same helper used before pipeline publication.
+    advisory = checked.advisories[0]  # Inspect the news record alongside the already-qualified findings.
+    assert incomplete and advisory.summary.startswith(original_summary + "\n\n")  # Never replace or silently rewrite the original source summary.
+    assert advisory.summary.count("Primary WSL check for CVE-2026-57968:") == 1  # Multiple occurrences cannot duplicate the appended caveat.
+    assert ("unavailable" if unavailable else "numerically conflicting") in advisory.summary  # Explain the actual primary-check failure, not a generic warning.
+    assert [source.url for source in advisory.sources] == [cve_record_url("CVE-2026-57968")]  # Exactly one reviewable primary link accompanies the qualification.
+    assert result.advisories[0].summary == original_summary and not result.advisories[0].sources  # Raw input remains unchanged for replay and audit.
