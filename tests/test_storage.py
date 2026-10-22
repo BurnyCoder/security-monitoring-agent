@@ -22,6 +22,20 @@ def test_alias_dedup_keeps_occurrences(tmp_path):
     assert store.advisories()[0]["title"] == "Corrected"
 
 
+def test_canonical_url_identity_merges_news_without_losing_installations(tmp_path):
+    """Global: no-CVE news has a stable URL identity. Local: changed titles remain one advisory while installations stay separate."""
+    store = Store(tmp_path / "test.sqlite3")  # Synthetic public-shaped evidence remains isolated.
+    identifier = "https://vendor.example/security/advisories/fixture"  # This explicit canonical ID differs from an arbitrary supporting citation.
+    assets = [Asset(id=name, kind="windows_app", name="Fixture", version="1", platform="Windows") for name in ("system-install", "user-install")]  # Separate observed installations share the same vulnerability.
+    store.save_inventory("run", Inventory(assets=assets))  # Preserve both installation snapshots for persisted occurrences.
+    for title, asset in zip(("Initial report", "Updated advisory title"), assets, strict=True):  # Repeated observations can change source text without changing identity.
+        advisory = Advisory(id=identifier, title=title, summary="Fixture", sources=[Source(title="Vendor advisory", url=identifier)])  # No CVE or invented alias is needed for a URL-keyed record.
+        finding = Finding(advisory_id=identifier, asset_id=asset.id, status="potentially_affected", rationale="Fixture")  # Each observation retains its own installation identity.
+        store.save_investigation("run", Investigation(summary="Fixture", advisories=[advisory], findings=[finding], coverage_notes=[]))  # Use ordinary ingestion and canonical occurrence hashing.
+    assert len(store.advisories()) == 1 and store.advisories()[0]["title"] == "Updated advisory title"  # Exact canonical URL identity deduplicates successive source observations.
+    assert len(store.findings()) == 2 and all(row["advisory"]["id"] == identifier for row in store.findings())  # Neither installation is lost or orphaned by the merge.
+
+
 def test_event_cursor_and_full_text(tmp_path):
     """Global: reconnectable complete logs. Local: large data round-trips without truncation."""
     store = Store(tmp_path / "test.sqlite3")

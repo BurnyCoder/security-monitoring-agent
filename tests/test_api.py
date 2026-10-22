@@ -35,6 +35,26 @@ def test_real_empty_dashboard_and_settings(client):
     assert client.get("/api/settings").json()["news_days"] == 1
 
 
+def test_task_timeout_change_updates_registered_execution_limit(client, monkeypatch):
+    """Global: saved agent budgets must match Windows task limits. Local: exercise a timeout-only PATCH."""
+    root = client.app.state.monitor.root  # The fixture owns all settings and never installs a real task.
+    previous = load_settings(root).model_copy(update={"schedule_mode": "task"})  # Represent an already configured, paused task.
+    save_settings(root, previous)  # Keep scheduling mode unchanged so only timeout reconciliation can trigger.
+    configured = []  # Capture the exact settings sent to the Windows integration boundary.
+
+    async def configure(root_path, settings):
+        """Global: avoid real scheduler mutation. Local: record the requested task execution budget."""
+        configured.append((root_path, settings.timeout_seconds))  # See https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset .
+        return {"installed": True}  # A successful registration permits atomic settings persistence.
+
+    monkeypatch.setattr("security_monitoring_agent.scheduling.configure_schedule", configure)  # Mock only the native registration boundary.
+    updated = previous.model_copy(update={"timeout_seconds": previous.timeout_seconds + 600})  # Increase the configured agent allowance.
+    response = client.patch("/api/settings", json=updated.model_dump())  # Follow the same route as saving the Settings form.
+    assert response.status_code == 200  # Reject unsuccessful saves before checking registration.
+    assert configured == [(root, updated.timeout_seconds)]  # The task's previous shorter execution limit must be replaced.
+    assert load_settings(root).timeout_seconds == updated.timeout_seconds  # The durable .env value agrees with the task specification.
+
+
 def test_cross_origin_mutation_rejected(client):
     """Global: foreign web pages cannot start local agents. Local: same-origin API remains usable."""
     response = client.post("/api/chats", json={"provider": "codex", "model": "gpt-6-luna"}, headers={"origin": "https://example.org"})
@@ -57,6 +77,38 @@ def test_news_window_override_changes_view_without_mutating_settings(client):
     assert len(client.get("/api/advisories?news_days=7").json()) == 1  # The stored record remains available in the broader window.
     assert client.get("/api/advisories?news_days=5").status_code == 422  # Reject unsupported windows consistently.
     assert client.get("/api/settings").json()["news_days"] == 7  # Viewing recent news never writes configuration.
+
+
+@pytest.mark.parametrize(("dates", "observed", "included"), [
+    ({"published_at": "2026-10-21T11:00:00Z"}, "2026-10-22T12:00:00Z", False),  # A precise 25-hour-old disclosure is outside the window, despite observation today.
+    ({"published_at": "2026-10-21T13:00:00Z"}, "2026-10-22T12:00:00Z", True),  # A precise 23-hour-old disclosure is inside the window.
+    ({"published_at": "2026-10-22T01:00:00+14:00"}, "2026-10-22T12:00:00Z", False),  # UTC conversion reveals an older disclosure despite its later local calendar date.
+    ({"published_at": "2026-10-20T23:00:00-14:00"}, "2026-10-22T12:00:00Z", True),  # UTC conversion preserves recent news despite its earlier local calendar date.
+    ({"published_at": "2026-10-20T12:00:00Z", "modified_at": "2026-10-21T13:00:00Z"}, "2026-10-22T12:00:00Z", True),  # A recent correction makes an older disclosure current news.
+    ({}, "2026-10-21T11:00:00Z", False),  # Missing source dates fall back to the exact observation timestamp.
+    ({}, "2026-10-21T13:00:00Z", True),  # Recent observation provides a documented fallback when the source supplies no dates.
+    ({"kev_added_at": "2026-10-21"}, "2026-10-22T12:00:00Z", True),  # Date-only source evidence includes the cutoff calendar day without claiming hour precision.
+    ({"kev_added_at": "2026-10-20"}, "2026-10-22T12:00:00Z", False),  # A date before the cutoff day remains old even when observed again today.
+], ids=["25-hours", "23-hours", "positive-offset-old", "negative-offset-recent", "recent-correction", "old-observation", "recent-observation", "cutoff-day", "earlier-day"])
+def test_news_window_preserves_timestamp_and_calendar_precision(client, monkeypatch, dates, observed, included):
+    """Global: 24 hours must mean 24 hours for timed evidence. Local: fixed-clock API cases also preserve date-only source precision."""
+    anchor = datetime(2026, 10, 22, 12, tzinfo=timezone.utc)  # Fix the boundary independently of the machine clock.
+
+    class FixedClock(datetime):
+        """Global: deterministic time-window assertions. Local: replace the route clock, not datetime parsing."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Global: return one reproducible instant. Local: respect the route's requested timezone."""
+            return anchor.astimezone(tz)  # See https://docs.python.org/3/library/datetime.html#datetime.datetime.astimezone .
+
+    monkeypatch.setattr("security_monitoring_agent.app.datetime", FixedClock)  # Only the HTTP cutoff clock is fixed.
+    store = client.app.state.monitor.store  # Use real persistence and response validation.
+    identifier = store.save_advisory(Advisory(id="boundary-news", title="Boundary fixture", summary="Synthetic dates", **dates))  # Source fields keep their declared precision.
+    store.update("advisory", identifier, observed_at=observed)  # Explicitly model collection time separately from disclosure time.
+    response = client.get("/api/advisories?news_days=1")  # Exercise the actual quick-window query.
+    assert response.status_code == 200  # Date handling must not break the public response contract.
+    assert [row["id"] for row in response.json()] == ([identifier] if included else [])  # Assert exact inclusion instead of only checking record count.
 
 
 def test_sse_replays_large_events_from_cursor(client):
