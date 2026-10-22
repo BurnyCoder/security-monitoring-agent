@@ -29,3 +29,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+docs = [
+    "pymupdf>=2.0",
+    "reportlab>=5.1.0",
+]
