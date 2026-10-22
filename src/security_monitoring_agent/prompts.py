@@ -57,6 +57,9 @@ exists; fewer are correct when evidence is insufficient. Include older relevant 
 The final answer MUST be one JSON object matching the provided Investigation schema. Include
 summary, advisories, findings and coverage_notes. Use no additional properties. All Source objects
 have title and url. Every advisory must have a real source. Do not invent IDs, versions or URLs.
+Use a stable CVE or OSV identifier as advisory.id when available; otherwise use the exact canonical
+vendor/research advisory URL as advisory.id, consistently across scans. Aliases must identify the same
+individual vulnerability, not related issues, multi-CVE notice members, product names or shared citations.
 """  # The schema is supplied independently by each provider adapter.
 
 
