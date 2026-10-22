@@ -2,6 +2,10 @@
 
 A local Windows + WSL dashboard that combines observed software inventory, CISA known-exploitation intelligence, OSV dependency checks, and live web research by **Codex or Claude Code**. Findings explain which installation an advisory may affect, cite the evidence, and propose fixes to inspect and copy.
 
+![Sentinel dashboard in a clean workspace](docs/images/dashboard.jpg)
+
+*Actual application screenshot from an empty workspace, paused for documentation. No sample findings or device inventory are published.*
+
 ## Method and quick start
 
 Each investigation collects Windows/WSL versions, scans explicitly configured project folders with OSV-Scanner, fetches CISA KEV, then asks the selected agent to research vendor advisories and exploitation reports. Validated records are saved in SQLite and streamed to the dashboard. Assessments distinguish **affected**, **potentially affected**, **not affected**, and **unknown**; exploitation evidence is tracked separately. See [coverage and evidence boundaries](docs/coverage.md).
@@ -20,10 +24,6 @@ uv run security-monitoring-agent serve
 Open [the dashboard](http://127.0.0.1:8765). Choose a provider and model, then **Run scan**. The default model is `gpt-6-luna`; choose `haiku` with Claude Code. Model names are editable and the CLI reports account/model restrictions. No API key is required for subscription CLI authentication.
 
 Automatic monitoring defaults to **60 minutes** while the server runs, with one initial scan on a new workspace. The news window defaults to seven days and supports one or thirty days. Closing the browser leaves monitoring running; stopping the server stops its timer. Pause automatic scans or opt into login/standalone Windows scheduling in **Settings**. The default dependency root is this repository alone. Additional Windows folders and WSL distribution/path pairs are explicit settings.
-
-![Sentinel dashboard in a clean workspace](docs/images/dashboard.jpg)
-
-*Actual application screenshot from an empty workspace, paused for documentation. No sample findings or device inventory are published.*
 
 ## Features
 
