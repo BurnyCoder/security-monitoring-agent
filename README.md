@@ -66,7 +66,7 @@ uv run --locked pytest -q
 node --experimental-vm-modules scripts/check_frontend.mjs
 ```
 
-The [setup guide](docs/setup.md) covers all configuration fields, background scheduling, stopping the server, unavailable models, and log inspection. [Validation records](reports/README.md) distinguish fixture tests from live provider experiments and document limitations. The [PDF validation report](reports/validation-report.pdf) is a concise engineering report credited to Libor Burian.
+The [setup guide](docs/setup.md) covers all configuration fields, background scheduling, stopping the server, unavailable models, and log inspection. [Validation records](reports/README.md) distinguish fixture tests from live provider experiments and document limitations; the [completion audit](reports/05-plan-completion-audit.md) maps each approved requirement to its implementation and evidence. The [PDF validation report](reports/validation-report.pdf) is a concise engineering report credited to Libor Burian.
 
 Schema validation checks structure and evidence references; it does **not** establish the factual correctness of an agent's claims. Windows cumulative updates and distro backports require vendor-specific interpretation. Lockfile findings describe recorded dependencies, not confirmed installation or reachability. A failed source, empty result, or completed workflow never proves the device is safe. Read [coverage](docs/coverage.md) before interpreting results.
 
