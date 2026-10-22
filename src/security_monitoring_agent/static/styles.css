@@ -97,7 +97,7 @@ main { max-width:1800px; margin:auto; padding:32px 34px 18px; }
 .scan-summary>div { flex:1; min-width:0; }
 .scan-summary strong { font-size:11px; color:#486a51; font-weight:600; }
 .scan-summary strong+.badge { margin-left:8px; } /* Global: distinct latest-attempt outcome. Local: keep its badge near the summary title. */
-.scan-summary p { font-size:10px; line-height:1.6; color:#83947f; margin:3px 0 0; }
+.scan-summary p { font-size:10px; line-height:1.6; color:#53665a; margin:3px 0 0; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; } /* Global: keep findings visible below the overview. Local: preview three summary lines; history and raw logs retain the full text. */
 .scan-success-date { display:block; margin-top:8px; font-size:10px; color:#6c8166; } /* Global: success is separate from recency. Local: show the actual fully completed scan timestamp, or its explicit absence. */
 .overview-grid { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:20px; align-items:start; }
 .main-column,.side-column,.stack { display:flex; flex-direction:column; gap:20px; min-width:0; }
