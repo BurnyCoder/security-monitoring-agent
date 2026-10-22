@@ -130,7 +130,43 @@ async def test_workflow_status_uses_observed_gaps_not_every_note(monkeypatch, tm
     store = prepare_pipeline(monkeypatch, tmp_path, result, coverage_status, web_searches)  # Explicit observable inputs determine degraded status.
     output = await pipeline.run_scan(Settings(), tmp_path, store, "run", lambda *_: None, asyncio.Event())  # Run the shared pipeline rather than duplicating status logic.
     assert output["status"] == expected and note in output["summary"]  # No free-text guessing or blanket notes-imply-partial rule.
-    assert bool(store.get("meta", "research_checkpoint")) == bool(web_searches)  # Only an observed web-search event advances the cursor.
+    assert bool(store.get("meta", "research_checkpoint")) == (expected == "completed")  # Partial research cannot move the successful-research cursor forward.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coverage_status,expected", [("partial", "partial"), ("ok", "completed")])
+async def test_research_checkpoint_preserves_previous_until_completed(monkeypatch, tmp_path, coverage_status, expected):
+    """Global: failed coverage must not skip incremental research. Local: preserve the last successful checkpoint until a complete researched scan."""
+    store = prepare_pipeline(monkeypatch, tmp_path, coverage_status=coverage_status)  # Both runs emit an observed web-search event.
+    previous = {"at": "2026-01-01T00:00:00+00:00"}  # A prior successful scan already established the cursor.
+    store.put("meta", "research_checkpoint", previous)  # Exercise cursor preservation rather than only initial absence.
+    output = await pipeline.run_scan(Settings(), tmp_path, store, "run", lambda *_: None, asyncio.Event())  # Execute the real publication and checkpoint branch.
+    assert output["status"] == expected  # Collection quality remains an explicit workflow outcome.
+    assert store.get("meta", "research_checkpoint") == (previous if expected == "partial" else {"at": store.inventory()["captured_at"]})  # Only the completed run records its new observation time.
+
+
+@pytest.mark.parametrize("identifier,alias", [("GHSA-fixture", "CVE-2026-1234"), ("CVE-2026-1234", "GHSA-fixture")])
+def test_finding_resolves_unambiguous_alias_from_current_response(tmp_path, identifier, alias):
+    """Global: a fresh source alias must not discard a supported finding. Local: bind the alias to its publishable current advisory before storage."""
+    store = Store(tmp_path / "monitor.sqlite3")  # No previous run has registered either identity.
+    source = Source(title="Fixture", url="https://example.org/advisory")  # News and applicability carry explicit evidence.
+    asset = Asset(id="fixture-app", kind="windows_app", name="Fixture", version="1", platform="Windows")  # Exact observed installation identity.
+    result = Investigation(summary="Fixture", advisories=[Advisory(id=identifier, aliases=[alias], title="Fixture", summary="Fixture", sources=[source])], findings=[Finding(advisory_id=alias, asset_id=asset.id, status="affected", rationale="Fixture", evidence=["Observed version"], sources=[source])], coverage_notes=[])  # The finding uses the equivalent name introduced by this same response.
+    checked, incomplete = pipeline._publishable_result(result, Inventory(assets=[asset]), store)  # Exercise the pre-persistence orphan gate.
+    assert not incomplete and len(checked.findings) == 1  # Equivalent fresh identities must survive publication.
+    assert checked.findings[0].advisory_id == "CVE-2026-1234"  # Preserve an available CVE identity for the downstream WSL primary checker.
+    store.save_investigation("run", checked)  # Normal storage subsequently chooses the canonical CVE.
+    assert store.findings()[0]["advisory"]["id"] == "CVE-2026-1234"  # The saved occurrence joins a real canonical advisory.
+
+
+def test_multi_cve_current_notice_does_not_resolve_as_one_cve(tmp_path):
+    """Global: shared notices are not vulnerability equivalences. Local: current-batch alias support retains the existing multi-CVE guard."""
+    store = Store(tmp_path / "monitor.sqlite3")  # Neither CVE exists independently in stored intelligence.
+    source = Source(title="Fixture", url="https://example.org/notice")  # A single notice covers multiple separate issues.
+    asset = Asset(id="fixture-app", kind="windows_app", name="Fixture", version="1", platform="Windows")  # Valid asset prevents unrelated rejection.
+    result = Investigation(summary="Fixture", advisories=[Advisory(id="USN-fixture", aliases=["CVE-2026-1234", "CVE-2026-5678"], title="Fixture", summary="Fixture", sources=[source])], findings=[Finding(advisory_id="CVE-2026-1234", asset_id=asset.id, status="unknown", rationale="Fixture")], coverage_notes=[])  # The shared notice cannot supply a distinct CVE record.
+    checked, incomplete = pipeline._publishable_result(result, Inventory(assets=[asset]), store)  # Do not collapse the notice to whichever CVE appeared first.
+    assert incomplete and not checked.findings  # Keep the unresolved reference visible rather than manufacturing a canonical record.
 
 
 @pytest.mark.asyncio

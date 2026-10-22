@@ -35,7 +35,11 @@ async def run_agent(settings: Settings, prompt: str, workdir: Path, emit: Callab
         final_path = directory / "final.txt"  # Codex writes the authoritative final response here.
         final_text = final_path.read_text(encoding="utf-8") if settings.provider == "codex" and final_path.exists() else None  # Fall back to completed event text only if absent.
         output = events.finish(require_structured=schema is not None, final_text=final_text)  # Reject incomplete or refused data.
+        emit("agent_result", output.text)  # Preserve the complete answer even if session metadata prevents continuation.
         if output.session_id is None and session_id:  # A resumed provider may omit its unchanged ID.
             output = AgentResult(output.text, output.structured, session_id, output.model, output.web_searches)  # Preserve the explicitly requested chat identity.
-        emit("agent_result", output.text)  # The complete final result survives temporary-file cleanup.
+        if session_id and output.session_id != session_id:  # Explicit resume must not silently bind the chat to another provider conversation.
+            raise RuntimeError("Agent returned a different session than the one requested for resume")  # Raw events and the rejected final answer remain logged.
+        if schema is None and not output.session_id:  # Fresh chats require an identity for the next explicit resume; fresh scans do not.
+            raise RuntimeError("Agent ended without a session identifier; this chat cannot be resumed")  # Do not save a seemingly successful turn whose history would be discarded.
         return output  # Domain validation is the caller's next clearly separated phase.
