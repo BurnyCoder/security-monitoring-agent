@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- Global: local dashboard shell. Local: all runtime content is escaped DOM text; https://developer.mozilla.org/en-US/docs/Web/API/Node/textContent. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142c35">
+  <title>Sentinel · Security monitoring</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <!-- Global: persistent navigation. Local: native anchors keep views linkable and keyboard accessible. -->
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><img src="/static/mark.svg" alt="" width="36" height="36"><span>sentinel<span class="brand-caption">SECURITY MONITORING</span></span></a>
+    <div class="workspace-label"><span class="device-dot"></span> Personal workspace <span class="local-tag">LOCAL</span></div>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="Main navigation">
+      <a href="#overview" data-view="overview"><span class="nav-icon" aria-hidden="true">◫</span>Overview</a>
+      <a href="#findings" data-view="findings"><span class="nav-icon" aria-hidden="true">◇</span>Device findings<span id="nav-findings" class="nav-count">0</span></a>
+      <a href="#intelligence" data-view="intelligence"><span class="nav-icon" aria-hidden="true">◎</span>Threat intelligence</a>
+      <a href="#inventory" data-view="inventory"><span class="nav-icon" aria-hidden="true">▦</span>Device inventory</a>
+      <a href="#history" data-view="history"><span class="nav-icon" aria-hidden="true">◷</span>Scan history</a>
+      <a href="#chat" data-view="chat"><span class="nav-icon" aria-hidden="true">▤</span>Ask an agent</a>
+    </nav>
+    <div class="sidebar-bottom">
+      <a href="#settings" data-view="settings"><span class="nav-icon" aria-hidden="true">⚙</span>Settings</a>
+      <div class="sidebar-note"><span class="device-dot"></span><div>Runs on your device<small>Windows + WSL</small></div></div>
+    </div>
+  </aside>
+  <div class="workspace">
+    <!-- Global: common scan controls. Local: provider and model overrides apply to the next scan. -->
+    <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> <strong id="breadcrumb">Overview</strong></div><div class="topbar-right"><span id="connection" class="connection"><span class="device-dot"></span>Connecting</span><span class="avatar" aria-label="Local device">S</span></div></header>
+    <div id="error-banner" class="error-banner" role="alert" hidden><span id="error-text"></span><button id="dismiss-error" class="icon-button" aria-label="Dismiss error">×</button></div>
+    <main id="main" tabindex="-1">
+      <section class="page-heading"><div><div class="eyebrow">YOUR SECURITY AT A GLANCE</div><h1 id="page-title">Security overview</h1><p id="page-description">Fresh intelligence. Local evidence. A clear next step.</p></div><div class="heading-actions"><span id="scan-state" class="status-label">Ready to scan</span><button id="cancel-scan" class="button button-secondary" hidden>Stop scan</button><button id="run-scan" class="button button-primary"><span aria-hidden="true">↗</span> Run scan</button></div></section>
+      <section class="scan-toolbar" aria-label="Scan configuration">
+        <div class="toolbar-controls"><label>Agent<select id="scan-provider"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label><label class="model-label">Model<input id="scan-model" list="model-suggestions" value="gpt-6-luna" autocomplete="off"><datalist id="model-suggestions"><option value="gpt-6-luna"></option><option value="haiku"></option></datalist></label><label>News window<select id="scan-window"><option value="1">Last 24 hours</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option></select></label></div><div class="schedule-summary"><span class="clock-glyph" aria-hidden="true">◷</span><span id="schedule-summary">Loading schedule…</span><a href="#settings" aria-label="Edit scan schedule">Configure</a></div>
+      </section>
+      <div id="view" aria-live="polite"><div class="loading-state">Connecting to your local workspace…</div></div>
+      <footer class="page-footer"><span>Sentinel <span class="footer-separator">/</span> Evidence before action</span><span id="last-updated">Local security workspace</span></footer>
+    </main>
+  </div>
+  <!-- Global: evidence drawer. Local: modal semantics and an explicit close action support keyboard use. -->
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div><aside id="detail-drawer" class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden><div class="drawer-heading"><span class="eyebrow">FINDING DETAILS</span><button id="close-drawer" class="icon-button" aria-label="Close finding details">×</button></div><div id="drawer-content"></div></aside>
+</body>
+</html>
