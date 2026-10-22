@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local configuration, complete agent transcripts, inventory, and downloaded tools.
+.env
+.env.*
+!.env.example
+data/
+logs/
+.tools/
+.pytest_cache/
+.ruff_cache/
+*.tmp
+*.sqlite*
