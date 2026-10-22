@@ -11,6 +11,7 @@ import sys  # Spawn the same interpreter without relying on PATH.
 import pytest  # Assertions test behavior rather than private implementation details.
 
 from security_monitoring_agent.process import run_process  # Shared production launcher.
+import security_monitoring_agent.process as process_module  # Delay only cleanup in the cancellation regression.
 
 
 @pytest.mark.asyncio
@@ -77,3 +78,40 @@ async def test_cancel_stops_owned_parent_and_child(tmp_path: Path) -> None:
         await run_process([sys.executable, "-c", script], cwd=tmp_path, emit=emit, cancel=cancel)  # Launch real tree.
     assert len(pids) == 2  # Test actually reached the child-creation stage.
     assert all(not process_exists(pid) for pid in pids)  # No background tool was orphaned.
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_waits_for_slow_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Global: repeated Cancel cannot orphan tools. Local: delay tree cleanup beyond one second."""
+    ready, cleaning, reaped = asyncio.Event(), asyncio.Event(), asyncio.Event()  # Synchronize on real lifecycle boundaries.
+    pids = []  # Inspect only the process created by this regression test.
+    processes = []  # Retain handles for teardown if a future regression fails the assertions.
+    original_stop = process_module._stop_tree  # Keep the actual platform termination behavior.
+    async def delayed_stop(process: asyncio.subprocess.Process) -> None:
+        """Global: reproduce a slow native cleanup. Local: permit several cancellation attempts."""
+        processes.append(process)  # Test teardown may need to reap a deliberately exposed leak.
+        cleaning.set()  # Signal that the first cancellation entered cleanup.
+        await asyncio.sleep(1.2)  # Real taskkill or agent descendants can take longer than a poll interval.
+        await original_stop(process)  # Reap the owned tree through production code.
+        reaped.set()  # The caller must not return before this boundary.
+    def emit(kind: str, text: str) -> None:
+        """Global: avoid timing assumptions at startup. Local: wait until the owned PID is known."""
+        if kind == "stdout":  # The helper reports its PID before sleeping.
+            pids.append(int(text.strip()))  # Retain only the test's owned identity.
+            ready.set()  # The subprocess exists and is ready to cancel.
+    monkeypatch.setattr(process_module, "_stop_tree", delayed_stop)  # Delay cleanup without replacing actual termination.
+    task = asyncio.create_task(run_process([sys.executable, "-c", "import os,time; print(os.getpid(),flush=True); time.sleep(30)"], cwd=tmp_path, emit=emit))  # Launch only a disposable helper.
+    await asyncio.wait_for(ready.wait(), timeout=5)  # A setup failure cannot hang the suite.
+    task.cancel()  # First cancellation starts owned-process cleanup.
+    await asyncio.wait_for(cleaning.wait(), timeout=5)  # Wait until the vulnerable cleanup await.
+    for _ in range(3):  # Simulate a watcher issuing Cancel repeatedly while cleanup is slow.
+        await asyncio.sleep(0.2)  # Let each cancellation reach an actual await point.
+        task.cancel()  # Cleanup must shield its separately owned task.
+    with pytest.raises(asyncio.CancelledError):  # Preserve cancellation as the public outcome.
+        await task  # Returning early would leave the process running.
+    try:  # Even a failing regression test must not leave its helper running.
+        assert reaped.is_set()  # Cleanup completed despite repeated cancellation delivery.
+        assert pids and not process_exists(pids[0])  # The owned process cannot outlive its cancelled invocation.
+    finally:  # Preserve test isolation if cleanup is broken again in a future edit.
+        for process in processes:  # Every retained handle belongs to this test's helper.
+            await original_stop(process)  # Reap safely; already exited processes are a no-op.

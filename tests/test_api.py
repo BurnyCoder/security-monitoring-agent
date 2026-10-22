@@ -40,6 +40,13 @@ def test_cross_origin_mutation_rejected(client):
     assert client.post("/api/chats", json={"provider": "codex", "model": "gpt-6-luna"}).status_code == 201
 
 
+def test_public_api_has_named_response_contracts(client):
+    """Global: clients can discover typed boundaries. Local: OpenAPI exposes persisted domain models."""
+    schema = client.get("/openapi.json").json()  # Inspect the same contract available to local clients.
+    for name in ("RunRecord", "StoredFinding", "ConversationDetail", "DashboardStatus"):
+        assert name in schema["components"]["schemas"]  # Reject anonymous or missing public response shapes.
+
+
 def test_sse_replays_large_events_from_cursor(client):
     """Global: reconnect must not lose output. Local: ended runs still replay complete unseen events."""
     store = client.app.state.monitor.store

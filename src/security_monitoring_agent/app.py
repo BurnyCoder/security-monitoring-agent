@@ -22,7 +22,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware  # Reject arb
 
 from .config import load_settings, save_settings  # UI edits use the same dotenv config as the CLI.
 from .diagnostics import diagnostics  # Read-only runtime probes.
-from .models import Contract, Settings  # Keep public request shapes strict.
+from .models import Contract, RunEvent, Settings  # Keep public request and event shapes strict.
+from .api_models import CancellationResponse, Conversation, ConversationDetail, DashboardStatus, InventorySnapshot, RunRecord, StoredAdvisory, StoredFinding  # Named responses document the local API.
 from .service import BusyError, Monitor  # No scan logic lives in HTTP route functions.
 
 
@@ -91,7 +92,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         """Global: dashboard entrypoint. Local: serve the packaged application shell."""
         return templates.TemplateResponse(request=request, name="index.html")  # All live data comes from typed APIs.
 
-    @app.get("/api/status")
+    @app.get("/api/status", response_model=DashboardStatus)
     async def status():
         """Global: concise operational overview. Local: count assessed occurrences, not raw feed size."""
         runs = monitor.store.all("run")  # Includes standalone scheduler runs through shared SQLite.
@@ -100,36 +101,36 @@ def create_app(root: Path | None = None) -> FastAPI:
         counts["advisories"] = len(monitor.store.advisories())  # Full intelligence baseline count.
         return {"active_run": monitor.active() or monitor.active("chat"), "next_scan_at": monitor.next_scan(), "last_successful": next((run for run in runs if run["kind"] == "scan" and run["status"] == "completed"), None), "counts": counts, "settings": load_settings(root)}  # Stable dashboard contract.
 
-    @app.get("/api/findings")
+    @app.get("/api/findings", response_model=list[StoredFinding])
     async def findings():
         """Global: persistent device exposure. Local: do not apply the news date filter here."""
         return monitor.store.findings()  # The frontend filters status, scope, severity and source.
 
-    @app.get("/api/advisories")
+    @app.get("/api/advisories", response_model=list[StoredAdvisory])
     async def advisories():
         """Global: recent intelligence view. Local: preserve separately recorded publication/addition dates."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=load_settings(root).news_days)).isoformat()[:10]  # Compare ISO calendar dates safely.
         rows = monitor.store.advisories()  # Storage retains the complete baseline regardless of this view.
         return [row for row in rows if max([row.get(field, "")[:10] for field in ("published_at", "modified_at", "kev_added_at") if row.get(field)] or [row["observed_at"][:10]]) >= cutoff]  # Corrected or newly exploited older disclosures can be news.
 
-    @app.get("/api/inventory")
+    @app.get("/api/inventory", response_model=InventorySnapshot | None)
     async def inventory():
         """Global: transparent coverage. Local: return the latest actual snapshot or null."""
         return monitor.store.inventory()  # Do not invent demo inventory for an unscanned machine.
 
-    @app.get("/api/runs")
+    @app.get("/api/runs", response_model=list[RunRecord])
     async def runs():
         """Global: full scan/chat audit history. Local: newest persisted job first."""
         return monitor.store.all("run")  # The UI can inspect failures and partial runs alike.
 
-    @app.post("/api/runs", status_code=202)
+    @app.post("/api/runs", status_code=202, response_model=RunRecord)
     async def start_scan(body: ScanRequest):
         """Global: manual trigger. Local: validate overrides and reuse the shared scan coordinator."""
         values = load_settings(root).model_dump()  # Capture a stable configuration snapshot.
         values.update(body.model_dump(exclude_none=True))  # Do not overwrite defaults with null.
         return monitor.start_scan(Settings.model_validate(values))  # Return immediately with a durable run ID.
 
-    @app.get("/api/runs/{run_id}")
+    @app.get("/api/runs/{run_id}", response_model=RunRecord)
     async def run_detail(run_id: str):
         """Global: inspect one lifecycle. Local: reject unknown IDs before accessing paths."""
         run = monitor.store.get("run", run_id)  # Parameterized database lookup.
@@ -137,7 +138,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(404, "Run not found")  # Clear missing-resource response.
         return run  # Contains final coverage summary and diagnostics.
 
-    @app.post("/api/runs/{run_id}/cancel")
+    @app.post("/api/runs/{run_id}/cancel", response_model=CancellationResponse)
     async def cancel_run(run_id: str):
         """Global: explicit cancel control. Local: signal only a known owned or scheduled run."""
         await run_detail(run_id)  # Validate before mutating cancellation state.
@@ -158,7 +159,7 @@ def create_app(root: Path | None = None) -> FastAPI:
                 batch = monitor.store.events(run_id, after=cursor)  # Each record retains its complete text.
                 for event in batch:  # EventSourceResponse performs JSON escaping and SSE framing.
                     cursor = event["id"]  # Advance only when the event is emitted.
-                    yield ServerSentEvent(data=event, id=str(cursor))  # Browser records the reconnect cursor.
+                    yield ServerSentEvent(data=RunEvent.model_validate(event), id=str(cursor))  # Validate the shared payload and preserve its reconnect cursor.
                 run = monitor.store.get("run", run_id)  # A separate scheduled process can update this record.
                 if not batch and run["status"] not in {"running", "queued"}:  # Drain terminal events before closing.
                     break  # Frontend reconnect can still request prior events explicitly.
@@ -199,19 +200,19 @@ def create_app(root: Path | None = None) -> FastAPI:
         """Global: explain setup failures. Local: probe tool versions without inspecting secrets."""
         return await diagnostics(root)  # Independent checks stay responsive and bounded.
 
-    @app.get("/api/chats")
+    @app.get("/api/chats", response_model=list[Conversation], response_model_exclude={"__all__": {"messages"}})
     async def chats():
         """Global: persist investigations across browser sessions. Local: list explicit conversation IDs."""
         return [{key: value for key, value in chat.items() if key != "messages"} for chat in monitor.store.all("chat")]  # Load messages only when selected.
 
-    @app.post("/api/chats", status_code=201)
+    @app.post("/api/chats", status_code=201, response_model=Conversation)
     async def create_chat(body: ChatRequest):
         """Global: bind conversation context. Local: validate an optional finding before creation."""
         if body.finding_id and monitor.store.get("finding", body.finding_id) is None:  # No invented finding references.
             raise HTTPException(404, "Finding not found")  # User can choose an existing row.
         return monitor.create_chat(body.provider, body.model, body.finding_id)  # Provider/model remain fixed per session.
 
-    @app.get("/api/chats/{chat_id}")
+    @app.get("/api/chats/{chat_id}", response_model=ConversationDetail)
     async def chat_detail(chat_id: str):
         """Global: reconnectable chat. Local: return saved messages and any live turn."""
         chat = monitor.store.get("chat", chat_id)  # Lookup before path-dependent operations.
@@ -219,7 +220,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(404, "Chat not found")  # Explicit absence.
         return {"chat": chat, "messages": chat["messages"], "active_run": monitor.active("chat", chat_id)}  # UI can resume event streaming.
 
-    @app.post("/api/chats/{chat_id}/messages", status_code=202)
+    @app.post("/api/chats/{chat_id}/messages", status_code=202, response_model=RunRecord)
     async def send_message(chat_id: str, body: MessageRequest):
         """Global: launch a follow-up turn. Local: preserve the full question and stream asynchronously."""
         await chat_detail(chat_id)  # Reject unknown IDs before acquiring a filesystem lock.

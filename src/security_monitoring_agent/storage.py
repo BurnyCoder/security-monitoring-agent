@@ -2,15 +2,78 @@
 
 Source: https://docs.python.org/3/library/sqlite3.html . The object table avoids an ORM for this
 single-user app; boundary models validate records before they enter this store.
+Alias semantics: https://ossf.github.io/osv-schema/#aliases-field . Multiple distinct CVEs
+are conservatively treated as a shared notice, not equivalent vulnerability identities.
 """
 
 import hashlib  # Deterministic occurrence IDs preserve findings across scans.
 import json  # Typed records are stored as complete JSON documents.
+import re  # Only exact CVE identifiers can select an unambiguous vulnerability identity.
 import sqlite3  # SQLite coordinates the web process and optional scheduled scanner.
 from contextlib import contextmanager  # Always close short-lived connections.
 from pathlib import Path  # Database remains inside ignored workspace data.
 
 from .models import Advisory, Inventory, Investigation, utc_now  # Shared wire contracts.
+
+
+EXPLOITATION_STRENGTH = {"none_known": 0, "unverified_report": 1, "public_poc": 2, "known_exploited": 3}  # Ordinary enrichment can add evidence, but cannot implicitly retract it.
+
+
+def _write_object(connection: sqlite3.Connection, category: str, identifier: str, body: dict, updated_at: str | None = None) -> None:
+    """Global: reusable transactional upsert. Local: accept an existing transaction and preserve rekeyed observation time."""
+    connection.execute("INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(category,id) DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at", (category, identifier, json.dumps(body, ensure_ascii=False), updated_at or utc_now()))  # SQL parameters preserve Unicode without interpolating data into code.
+
+
+def _canonical(connection: sqlite3.Connection, identifier: str) -> str:
+    """Global: resolve equivalent vulnerability names. Local: share the caller's transaction for consistent writes."""
+    row = connection.execute("SELECT advisory_id FROM aliases WHERE alias=?", (identifier,)).fetchone()  # Indexed lookup contains equality mappings only.
+    return row[0] if row else identifier  # Unseen source IDs remain independently addressable.
+
+
+def _finding_id(advisory_id: str, asset_id: str) -> str:
+    """Global: one finding per vulnerability and installation. Local: reuse exactly the same key when aliases merge."""
+    return hashlib.sha256(f"{advisory_id}\0{asset_id}".encode()).hexdigest()[:24]  # A separator prevents ambiguous identity concatenation.
+
+
+def _identifiers(record: dict) -> set[str]:
+    """Global: retain all source identifiers. Local: display aliases need a separate equivalence check before registration."""
+    return {record["id"], *record.get("aliases", [])}  # Source notice references remain visible even when unsafe to merge.
+
+
+def _merge_advisories(records: list[dict], canonical: str) -> dict:
+    """Global: combine evidence without weakening it. Local: later text wins while sources and established facts survive."""
+    merged, sources, identifiers = {}, {}, set()  # Fold oldest existing records first and the incoming source last.
+    for record in records:  # Record order controls ordinary text updates, not exploitation evidence strength.
+        previous = merged  # Retain prior fields while applying the next complete source document.
+        merged = {**previous, **record}  # Latest title, summary, and nonempty severity remain current.
+        identifiers.update(_identifiers(record))  # Preserve original IDs after selecting a new canonical CVE.
+        sources.update({source["url"]: source for source in record.get("sources", [])})  # Deduplicate citations by exact supporting URL.
+        for field in ("published_at", "modified_at", "kev_added_at"):  # Missing enrichment dates cannot erase established dates.
+            merged[field] = record.get(field) or previous.get(field, "")  # Keep disclosure and KEV addition as separate facts.
+        merged["exploitation"] = max((previous.get("exploitation", "none_known"), record.get("exploitation", "none_known")), key=EXPLOITATION_STRENGTH.__getitem__)  # Preserve the strongest observed evidence category.
+        if merged.get("severity", "unknown") == "unknown":  # An omitted categorical severity is not a correction.
+            merged["severity"] = previous.get("severity", "unknown")  # Never manufacture a default severity.
+    return {**merged, "id": canonical, "aliases": sorted(identifiers - {canonical}), "sources": list(sources.values()), "observed_at": utc_now()}  # Only advisory observation time changes during enrichment.
+
+
+def _rekey_findings(connection: sqlite3.Connection, previous_ids: set[str], canonical: str) -> None:
+    """Global: consolidate occurrences with their advisory. Local: the most recently checked assessment survives collisions."""
+    if not previous_ids - {canonical}:  # The common hourly refresh keeps the same identity.
+        return  # Avoid scanning findings for every unchanged feed record.
+    winners, removals = {}, []  # Keep separate installations and remove obsolete identity hashes atomically.
+    rows = connection.execute("SELECT id,body,updated_at FROM objects WHERE category='finding' ORDER BY updated_at,id").fetchall()  # This rare merge reads complete saved observations.
+    for row in rows:  # Database identity changes must not count as reassessment.
+        body = json.loads(row["body"])  # Preserve the original inventory snapshot, run, evidence, and timestamp.
+        if body["advisory_id"] not in previous_ids | {canonical}:  # Unrelated vulnerability occurrences stay untouched.
+            continue  # Only linked advisory records participate in collision resolution.
+        identifier = _finding_id(canonical, body["asset_id"])  # Reuse the normal occurrence key to prevent future duplicate inserts.
+        priority = (body.get("checked_at", row["updated_at"]), row["updated_at"], row["id"])  # Prefer the latest observation, with deterministic ties.
+        if identifier not in winners or priority > winners[identifier][0]:  # Never revive an older affected or cleared assessment.
+            winners[identifier] = (priority, {**body, "id": identifier, "advisory_id": canonical}, row["updated_at"])  # Preserve the winner's original timestamps.
+        removals.append((row["id"],))  # Old and canonical collision rows are replaced by one winner.
+    connection.executemany("DELETE FROM objects WHERE category='finding' AND id=?", removals)  # Removals roll back if any later merge write fails.
+    for identifier, (_, body, updated_at) in winners.items():  # Write one occurrence per distinct installation.
+        _write_object(connection, "finding", identifier, body, updated_at)  # Rekeying cannot make stale evidence look fresh.
 
 
 class Store:
@@ -47,7 +110,7 @@ class Store:
     def put(self, category: str, identifier: str, body: dict) -> None:
         """Global: common upsert. Local: values are SQL parameters, never interpolated SQL."""
         with self.connect() as connection:  # No network or subprocess work occurs in transactions.
-            connection.execute("INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(category,id) DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at", (category, identifier, json.dumps(body, ensure_ascii=False), utc_now()))  # Preserve Unicode evidence.
+            _write_object(connection, category, identifier, body)  # Reuse the same implementation for standalone and grouped writes.
 
     def get(self, category: str, identifier: str) -> dict | None:
         """Global: retrieve one document. Local: missing records remain explicitly absent."""
@@ -92,28 +155,36 @@ class Store:
     def canonical(self, identifier: str) -> str:
         """Global: resolve aliases. Local: fall back to the supplied stable advisory identifier."""
         with self.connect() as connection:  # Alias mappings are small indexed lookups.
-            row = connection.execute("SELECT advisory_id FROM aliases WHERE alias=?", (identifier,)).fetchone()  # Preserve exact case from sources.
-        return row[0] if row else identifier  # Unseen advisory IDs can be inserted later.
+            return _canonical(connection, identifier)  # Preserve exact case from sources.
 
     def save_advisory(self, advisory: Advisory) -> str:
-        """Global: merge source records without duplicate CVEs. Local: preserve KEV provenance."""
-        identifiers = list(dict.fromkeys([advisory.id, *advisory.aliases]))  # Keep aliases without repetition.
-        known = next((self.canonical(value) for value in identifiers if self.canonical(value) != value or self.get("advisory", value)), None)  # Prefer existing identity.
-        canonical = known or next((value for value in identifiers if value.startswith("CVE-")), advisory.id)  # CVEs are convenient primary names.
-        previous = self.get("advisory", canonical) or {}  # Corrections update one logical advisory.
-        body = {**previous, **advisory.model_dump(mode="json"), "id": canonical, "observed_at": utc_now()}  # Latest source text wins.
-        body["aliases"] = sorted(set(identifiers + previous.get("aliases", [])) - {canonical})  # Retain every discovered identifier.
-        body["sources"] = list({source["url"]: source for source in previous.get("sources", []) + body["sources"]}.values())  # Merge provenance.
-        for field in ("published_at", "modified_at", "kev_added_at"):  # Empty enrichment cannot erase known dates.
-            body[field] = body[field] or previous.get(field, "")  # Unknown and absent are distinct.
-        if previous.get("exploitation") == "known_exploited":  # A later generic model output cannot negate KEV.
-            body["exploitation"] = "known_exploited"  # Preserve authoritative exploitation evidence.
-        if body["severity"] == "unknown":  # Keep a previously established severity when enrichment omits it.
-            body["severity"] = previous.get("severity", "unknown")  # Never manufacture a default severity.
-        self.put("advisory", canonical, body)  # Commit the merged record before its alias references.
-        with self.connect() as connection:  # Alias additions are a separate short batch.
-            connection.executemany("INSERT INTO aliases VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET advisory_id=excluded.advisory_id", [(value, canonical) for value in [canonical, *body["aliases"]]])  # Resolve future occurrences.
-        return canonical  # Findings use this stable identity.
+        """Global: atomically join equivalent advisories and findings. Local: isolate multi-CVE notices and conflicting links."""
+        incoming = advisory.model_dump(mode="json")  # Typed input becomes one source record in the evidence fold.
+        identifiers = sorted(_identifiers(incoming))  # Deterministic parameter order makes identity selection reproducible.
+        placeholders = ",".join("?" for _ in identifiers)  # Only placeholder count is constructed; identifiers remain SQL parameters.
+        with self.connect() as connection:  # One connection replaces repeated per-alias reads and independent commits.
+            connection.execute("BEGIN IMMEDIATE")  # Reserve the writer before identity reads; see https://www.sqlite.org/lang_transaction.html .
+            rows = connection.execute(f"SELECT id,body FROM objects WHERE category='advisory' AND (id IN ({placeholders}) OR id IN (SELECT advisory_id FROM aliases WHERE alias IN ({placeholders}))) ORDER BY updated_at,id", [*identifiers, *identifiers]).fetchall()  # Include previously separate direct records as well as alias targets.
+            records = [json.loads(row["body"]) for row in rows]  # Existing metadata is merged oldest first.
+            discovered = set(identifiers).union(*(_identifiers(record) for record in records))  # Check the whole discovered identity group, including indirect CVEs.
+            cves = sorted(value for value in discovered if re.fullmatch(r"CVE-\d{4}-\d{4,}", value))  # Same conservative rule as OSV normalization.
+            if len(cves) > 1:  # A notice spanning multiple CVEs or conflicting aliases cannot establish equivalence.
+                canonical = advisory.id  # Keep the source notice or conflicting CVE independently addressable.
+                records = [record for record in records if record["id"] == canonical]  # Enrich only an existing exact source record.
+                aliases = {canonical}  # Display source references but never register them as equality mappings.
+            else:  # Only an unambiguous group can consolidate records and installation occurrences.
+                canonical = cves[0] if cves else records[0]["id"] if records else advisory.id  # Prefer the sole CVE; otherwise retain an existing source identity.
+                aliases = set(identifiers) | {record["id"] for record in records} | {canonical}  # Current verified links and former canonical IDs need redirects.
+                for record in records:  # Retain only previously registered equivalences, not ambiguous display-only aliases.
+                    aliases.update(row[0] for row in connection.execute("SELECT alias FROM aliases WHERE advisory_id=?", (record["id"],)))  # All historical safe aliases redirect to the survivor.
+            previous_ids = {record["id"] for record in records}  # Deletion and occurrence rekeying share the same accepted identity group.
+            body = _merge_advisories([*records, incoming], canonical)  # Preserve strongest exploitation, dates, and every source URL.
+            body["aliases"] = sorted(set(body["aliases"]) | (aliases - {canonical}))  # Preserve older registered identifiers even if a source omitted them.
+            _rekey_findings(connection, previous_ids, canonical)  # Merge occurrence collisions without altering assessment freshness.
+            connection.executemany("DELETE FROM objects WHERE category='advisory' AND id=?", [(identifier,) for identifier in previous_ids - {canonical}])  # No duplicate superseded object remains in the dashboard.
+            _write_object(connection, "advisory", canonical, body)  # Write the surviving advisory in the same transaction as its findings.
+            connection.executemany("INSERT INTO aliases VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET advisory_id=excluded.advisory_id", [(value, canonical) for value in sorted(aliases)])  # Any failure rolls back the entire identity consolidation.
+        return canonical  # Findings use the now-committed canonical identity.
 
     def save_investigation(self, run_id: str, result: Investigation) -> None:
         """Global: preserve findings between scans. Local: upsert only explicitly assessed occurrences."""
@@ -121,10 +192,12 @@ class Store:
             self.save_advisory(advisory)  # Shared merging handles feed and model evidence.
         snapshot = self.get("inventory", run_id) or {"assets": []}  # Findings need their original installed facts.
         assets = {asset["id"]: asset for asset in snapshot["assets"]}  # Constant-time occurrence lookup.
-        for finding in result.findings:  # Absent findings are retained, never silently marked fixed.
-            canonical = self.canonical(finding.advisory_id)  # Merge OSV aliases with CVE intelligence.
-            identifier = hashlib.sha256(f"{canonical}\0{finding.asset_id}".encode()).hexdigest()[:24]  # Stable per installation.
-            self.put("finding", identifier, {**finding.model_dump(mode="json"), "id": identifier, "advisory_id": canonical, "asset": assets.get(finding.asset_id), "run_id": run_id, "checked_at": utc_now()})  # Retain exact snapshot facts.
+        with self.connect() as connection:  # Serialize alias resolution and occurrence writes against other advisory merges.
+            connection.execute("BEGIN IMMEDIATE")  # Another writer cannot rename a canonical ID between lookup and insertion.
+            for finding in result.findings:  # Absent findings are retained, never silently marked fixed.
+                canonical = _canonical(connection, finding.advisory_id)  # Merge OSV aliases with CVE intelligence using this transaction's view.
+                identifier = _finding_id(canonical, finding.asset_id)  # Shared hashing also rekeys historical occurrences during a merge.
+                _write_object(connection, "finding", identifier, {**finding.model_dump(mode="json"), "id": identifier, "advisory_id": canonical, "asset": assets.get(finding.asset_id), "run_id": run_id, "checked_at": utc_now()})  # Retain exact snapshot facts.
 
     def advisories(self) -> list[dict]:
         """Global: intelligence view. Local: expose merged advisory records."""

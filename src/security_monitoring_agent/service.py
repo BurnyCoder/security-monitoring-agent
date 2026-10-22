@@ -188,7 +188,7 @@ class Monitor:
         self.store.update("run", run_id, cancel_requested=True)  # A separate owner polls this shared flag.
         if run_id in self.cancellations:  # Fast path when this process owns the job.
             self.cancellations[run_id].set()  # Provider drains logs while terminating descendants.
-            if run_id in self.started:  # An unstarted task must first enter its cleanup scope.
+            if run_id in self.started and not self.tasks[run_id].cancelling():  # Never interrupt an in-progress cleanup.
                 self.tasks[run_id].cancel()  # Also interrupt inventory or a stalled network phase.
         return True  # Cancellation is requested, not falsely reported already complete.
 
@@ -199,7 +199,7 @@ class Monitor:
                 run = self.store.get("run", identifier)  # Read cross-process cancellation requests.
                 if run and run.get("cancel_requested") and identifier in self.tasks:  # Target current owned job only.
                     self.cancellations[identifier].set()  # Propagate to the reusable process runner.
-                    if identifier in self.started:  # Preserve lock cleanup for just-created tasks.
+                    if identifier in self.started and not self.tasks[identifier].cancelling():  # Repeated polling must not re-cancel cleanup.
                         self.tasks[identifier].cancel()  # Stop non-provider phases too.
             await asyncio.sleep(1)  # Responsiveness without busy-polling the database.
 

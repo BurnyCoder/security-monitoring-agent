@@ -140,3 +140,16 @@ class Investigation(Contract):
     advisories: list[Advisory]  # News may be relevant without a device finding.
     findings: list[Finding]  # Every definitive assessment must validate against inventory.
     coverage_notes: list[str]  # Disclose limits, conflicts, and searches performed.
+
+
+class RunEvent(Contract):
+    """Global: durable stream contract. Local: complete text plus a reconnect cursor.
+
+    Source: https://fastapi.tiangolo.com/tutorial/server-sent-events/ .
+    """
+
+    id: int  # SQLite cursor is sent as the SSE event ID.
+    run_id: str  # Events never migrate between investigations.
+    kind: str  # Raw streams and readable milestones share the same transport.
+    text: str  # Preserve long output without truncation.
+    created_at: str  # Per-event UTC observation timestamp.

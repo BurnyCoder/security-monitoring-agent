@@ -2,6 +2,8 @@
 
 The monitor records device/package facts, fetches known-exploitation intelligence, scans configured project dependencies, and gives that evidence to the selected agent for web research. Coverage is reported per collector, feed, distribution, and project. An unavailable source or failed command is an error or partial result; it is not evidence that the device is unaffected.
 
+A run marked `completed` means the configured workflow finished with no detected collector failure, missing live-search event, rejected record, or structurally unsupported definitive assessment. It does not guarantee exhaustive coverage, factual accuracy of agent conclusions, or that the device is unaffected. Those observable gaps produce `partial`; model-written coverage notes remain verbatim in the run summary and coverage log events, but arbitrary note text is not interpreted as a failure signal. This behavior is implemented in [the scan pipeline](../src/security_monitoring_agent/pipeline.py) and tested with synthetic results in [the pipeline tests](../tests/test_pipeline.py).
+
 ## Windows and WSL inventory
 
 Windows collection reads the OS caption, architecture, edition, display version, build, and revision. It reads application names, versions, publishers, and occurrence locations from system/current-user uninstall registry scopes, including the 32-bit scopes, and current-user AppX packages. It does not inspect other users' profiles or enumerate portable programs. The registry approach follows [Microsoft's inventory guidance](https://learn.microsoft.com/en-us/powershell/scripting/samples/working-with-software-installations); it avoids `Win32_Product`, whose queries can initiate MSI consistency checks and repairs.
@@ -53,10 +55,12 @@ Install the native scanner using [official installation instructions](https://go
 
 The automated collector/intelligence tests cover independent Windows installation identities, supplemental KB preservation, collector failures, dpkg source/binary differences, exclusion of non-installed packages, unsupported package managers, malformed/incomplete WSL metadata, legacy WSL version NUL padding, and cancellation propagation. KEV fixtures verify preservation of old CVEs, addition-versus-publication dates, source provenance, and invalid feed rejection. Scanner fixtures verify lockfile-scoped findings, published fix evidence, clean-package inventory, withdrawn advisories, and exit `0`/`1`/`127`/`128` handling.
 
+Pipeline tests verify that blocked inventory and investigation writes leave the event loop responsive, cancellation waits for an outstanding database worker, rejected or downgraded claims produce visible partial results, and ordinary model scope notes remain visible without automatically changing workflow status. Blocking database phases use [`asyncio.to_thread`](https://docs.python.org/3/library/asyncio-task.html#asyncio.to_thread); cancellation is reported after the active database worker finishes, so a cancelled run cannot continue writing after scan ownership is released.
+
 Run the focused checks with:
 
 ```powershell
-uv run pytest tests/test_collectors.py tests/test_intelligence.py tests/test_dependencies.py
+uv run pytest tests/test_collectors.py tests/test_intelligence.py tests/test_dependencies.py tests/test_pipeline.py
 ```
 
 Live run results belong in the experiment reports and timestamped local logs; the tests above use synthetic fixtures and are not measurements of real-world vulnerability-detection accuracy.

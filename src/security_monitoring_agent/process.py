@@ -78,6 +78,31 @@ async def _stop_tree(process: asyncio.subprocess.Process) -> None:
     await process.wait()  # Reap the parent and release its process handle.
 
 
+async def _cleanup(process: asyncio.subprocess.Process, completion: asyncio.Task) -> None:
+    """Global: cleanup owns its lifetime. Local: terminate, drain final bytes, and reap."""
+    await _stop_tree(process)  # Stop descendants before releasing the scan lock.
+    try:  # Preserve diagnostic bytes the CLI wrote immediately before termination.
+        await asyncio.wait_for(asyncio.shield(completion), timeout=5)  # Drain EOF without waiting forever on a detached pipe.
+    except BaseException:  # A failed callback cannot prevent remaining task cleanup.
+        pass  # The outer invocation retains the original error or cancellation.
+    completion.cancel()  # A malformed callback must not leave drain tasks running.
+    await asyncio.gather(completion, return_exceptions=True)  # Retrieve every lifecycle exception.
+
+
+async def _reap_uninterrupted(process: asyncio.subprocess.Process, completion: asyncio.Task) -> None:
+    """Global: repeated Cancel cannot interrupt cleanup. Local: shield and await its task.
+
+    Source: https://docs.python.org/3/library/asyncio-task.html#shielding-from-cancellation .
+    """
+    cleanup = asyncio.create_task(_cleanup(process, completion))  # Retain a strong reference independent of caller cancellation.
+    while not cleanup.done():  # Repeated caller cancellations still must wait for owned processes.
+        try:  # shield protects the cleanup task, while caller cancellation still raises here.
+            await asyncio.shield(cleanup)  # Never detach cleanup and return prematurely.
+        except asyncio.CancelledError:  # A watcher or shutdown may issue cancel more than once.
+            continue  # Keep waiting without forwarding cancellation into cleanup.
+    cleanup.result()  # Surface an actual cleanup failure instead of silently orphaning it.
+
+
 async def run_process(args: Sequence[str], *, cwd: Path, stdin: str | None = None, emit: Callable[[str, str], None] | None = None, cancel: asyncio.Event | None = None, timeout: float = 1800, env: Mapping[str, str] | None = None) -> ProcessResult:
     """Global: shared subprocess facade. Local: launch, stream, await, and clean up.
 
@@ -108,13 +133,7 @@ async def run_process(args: Sequence[str], *, cwd: Path, stdin: str | None = Non
             raise TimeoutError(f"Process exceeded {timeout:g} seconds")  # Preserve the configured timeout in diagnostics.
         return completion.result()  # Surface callback failures and transport errors too.
     except BaseException:  # Includes task cancellation, not just ordinary errors.
-        await _stop_tree(process)  # Stop descendant tools before releasing the scan lock.
-        try:  # Preserve diagnostic bytes the CLI wrote immediately before termination.
-            await asyncio.wait_for(asyncio.shield(completion), timeout=5)  # Drain EOF without delaying cleanup indefinitely.
-        except BaseException:  # A failed callback or detached pipe cannot block cancellation.
-            pass  # Preserve the original cancellation, timeout, or transport exception.
-        completion.cancel()  # A malformed callback must not leave drain tasks running.
-        await asyncio.gather(completion, return_exceptions=True)  # Retrieve cleanup exceptions.
+        await _reap_uninterrupted(process, completion)  # Shield slow tree cleanup against repeated cancellation.
         raise  # Keep the original error type for lifecycle classification.
     finally:  # The event waiter has no useful work once the child finishes.
         if cancellation is not None:  # No waiter was created when cancellation is unused.
