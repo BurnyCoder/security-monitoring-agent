@@ -91,3 +91,30 @@ async def test_codex_resume_uses_stdin_and_supported_flags(tmp_path: Path, monke
     assert "--cd" not in recorded["args"] and "--color" not in recorded["args"]  # Unsupported resume flags omitted.
     assert recorded["stdin"] == "literal `prompt`"  # Prompt bypasses shell parsing.
     assert result.text == "A complete answer"  # Native result file takes precedence.
+    assert result.session_id == "thread-id"  # Omitted resume metadata retains the explicitly requested session.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("requested,reported,error", [(None, None, "session identifier"), (None, "", "session identifier"), ("requested-session", "different-session", "different session"), ("requested-session", None, None)])
+async def test_chat_session_binding_rejects_missing_or_changed_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, requested: str | None, reported: str | None, error: str | None) -> None:
+    """Global: successful chat turns must remain resumable. Local: replay missing or conflicting CLI metadata."""
+    captured = []  # Metadata rejection must not hide the final answer from the complete transcript.
+    async def fake_process(args: list[str], **kwargs) -> ProcessResult:
+        """Global: test identity handling without inference. Local: emit an otherwise successful provider response."""
+        if provider == "claude":  # Claude repeats its session identity on the terminal result.
+            events = [{"type": "result", "session_id": reported, "is_error": False, "result": "Complete answer"}]  # Null simulates absent metadata.
+        else:  # Codex identifies the session separately from the completed assistant message.
+            events = [{"type": "thread.started", "thread_id": reported}, {"type": "item.completed", "item": {"type": "agent_message", "text": "Complete answer"}}, {"type": "turn.completed"}]  # No native final file is needed for this metadata case.
+        for event in events:  # Use the real parser and runner boundaries rather than a fake AgentResult.
+            kwargs["emit"]("stdout", json.dumps(event) + "\n")  # Raw protocol remains available even when identity validation rejects it.
+        return ProcessResult(0, "", "")  # Transport success cannot override a broken conversation identity.
+    monkeypatch.setattr("security_monitoring_agent.agents.runner.run_process", fake_process)  # Only replace the external process.
+    settings = Settings(provider=provider, model="fixture-model")  # Arbitrary model strings do not affect session validation.
+    if error:  # A new chat needs an identity; a resumed chat cannot silently switch identities.
+        with pytest.raises(RuntimeError, match=error):  # Failure is visible instead of discarding history on the next message.
+            await run_agent(settings, "Question", tmp_path, lambda *event: captured.append(event), asyncio.Event(), session_id=requested)  # Chat calls do not supply a scan schema.
+        assert ("agent_result", "Complete answer") in captured  # The provider's entire answer remains auditable despite failed session validation.
+    else:  # A known resume remains usable when the CLI omits its unchanged session metadata.
+        answer = await run_agent(settings, "Question", tmp_path, lambda *_: None, asyncio.Event(), session_id=requested)  # Preserve the explicit caller-owned identity.
+        assert answer.session_id == requested  # Never substitute a global latest provider session.

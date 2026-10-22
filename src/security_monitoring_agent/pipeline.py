@@ -5,6 +5,7 @@ Source: https://docs.python.org/3/library/asyncio-task.html . Cancellation is ch
 
 import asyncio  # Shared cancellation survives a disconnected dashboard.
 import json  # Full evidence snapshots are readable by either CLI.
+import re  # Distinct CVEs in a shared notice cannot become equivalent current-response aliases.
 from datetime import datetime, timedelta, timezone  # Compute overlap from successful checkpoints.
 from pathlib import Path  # Keep each run's working files inside the current workspace.
 
@@ -67,9 +68,19 @@ def _publishable_result(result: Investigation, inventory: Inventory, store: Stor
             validated.coverage_notes.append(f"Rejected uncited advisory: {advisory.id}")  # Retain its identity for auditing against raw provider logs.
     validated.advisories = [advisory for advisory in validated.advisories if advisory.sources]  # Filter before evaluating finding references.
     known_advisories = {advisory.id for advisory in validated.advisories}  # Earlier deterministic intelligence is checked through the store below.
+    current_aliases = {}  # Resolve only unambiguous equality links introduced in this publishable batch.
+    for advisory in validated.advisories:  # OSV aliases denote identity: https://ossf.github.io/osv-schema/#aliases-field .
+        identifiers = {advisory.id, *advisory.aliases}  # Include the source's own ID when detecting multi-CVE notices.
+        if sum(bool(re.fullmatch(r"CVE-\d{4}-\d{4,}", identifier)) for identifier in identifiers) > 1:  # Preserve the storage layer's separate-notice rule.
+            continue  # Multi-issue references are not aliases for a single vulnerability.
+        for alias in advisory.aliases:  # Multiple distinct owners make an alias ambiguous within this batch.
+            current_aliases.setdefault(alias, set()).add(advisory.id)  # Retain the publishable source ID that storage can canonicalize later.
     findings = []  # Build only occurrences with a publishable advisory identity.
     for finding in validated.findings:  # Existing aliases can legitimately refer to earlier source intelligence.
-        if finding.advisory_id in known_advisories or store.get("advisory", store.canonical(finding.advisory_id)):  # Do not persist orphan applicability claims.
+        owners = current_aliases.get(finding.advisory_id, set())  # Fresh aliases do not exist in the persistent index yet.
+        if finding.advisory_id not in known_advisories and len(owners) == 1 and not re.fullmatch(r"CVE-\d{4}-\d{4,}", finding.advisory_id):  # Keep CVE aliases available to the downstream primary-record checker.
+            finding.advisory_id = next(iter(owners))  # Bind to a real current advisory before applying the orphan gate.
+        if finding.advisory_id in known_advisories or len(owners) == 1 or store.get("advisory", store.canonical(finding.advisory_id)):  # Current unambiguous aliases are registered when their advisory is saved.
             findings.append(finding)  # Preserve supported and explicitly uncertain assessments.
         else:  # Rejected news must not leave behind an unexplained occurrence.
             incomplete = True  # Surface the actual evidence gap in final status.
@@ -113,7 +124,9 @@ async def run_scan(settings: Settings, root: Path, store: Store, run_id: str, em
     incomplete = source_gap or model_gap or primary_gap or any(item.status != "ok" for item in inventory.coverage) or response.web_searches == 0  # Objective collection/research/validation gaps determine partial status.
     if response.web_searches == 0:  # A successful CLI answer alone does not prove actual web research.
         validated.coverage_notes.append("No live web-search event was observed; research checkpoint was not advanced.")  # Explain degraded capability.
-    else:  # Update incremental cursor only after actual web research and valid structured output.
+    elif incomplete:  # Partial source collection or rejected/qualified evidence is not a successful research checkpoint.
+        validated.coverage_notes.append("Research checkpoint was not advanced because this run has unresolved collection or evidence gaps.")  # Keep the prior successful cursor and explain the retry scope.
+    else:  # Advance only after actual web research and a completed validated workflow.
         await _storage_phase(store.put, "meta", "research_checkpoint", {"at": inventory.captured_at})  # Collection time is conservative for overlap.
     for note in validated.coverage_notes:  # Preserve every original model note as well as concrete validation messages.
         emit("coverage", note)  # Stream complete qualifications in the same timestamped log as prompts and output.
