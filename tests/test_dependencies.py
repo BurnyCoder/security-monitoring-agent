@@ -51,3 +51,28 @@ async def test_scanner_exit_semantics(monkeypatch, tmp_path, exit_code, status):
     settings = Settings(project_roots=[ProjectRoot(path=str(tmp_path))])  # Only explicit root is scanned.
     _, _, _, coverage = await scan_projects(settings, tmp_path, lambda *_: None)  # No live scanner.
     assert coverage[0].status == status  # Errors can never masquerade as no findings.
+
+
+@pytest.mark.asyncio
+async def test_wsl_project_argv_is_literal_and_occurrences_stay_separate(monkeypatch, tmp_path):
+    """Global: explicitly configured WSL projects retain their own scope. Local: argv contains literal distro/path values without shell interpolation."""
+    distribution = "Ubuntu Fixture"  # A name containing a space must remain one argument.
+    paths = ["/home/fixture/project with spaces;$(literal)", "/home/fixture/second project"]  # Metacharacters are path text, never a shell command.
+    calls = []  # Record the wrapper boundary without launching WSL or installing a scanner.
+    async def fake_process(args, **options):
+        """Global: reproduce a successful Linux scanner response. Local: give each configured project its own source-file path."""
+        calls.append((args, options))  # Preserve the complete argument vector and timeout contract.
+        payload = scanner_fixture()  # Reuse the same recorded package/version to test occurrence isolation.
+        payload["results"][0]["source"]["path"] = args[-1] + "/uv.lock"  # Native Linux scanner paths remain native through normalization.
+        return SimpleNamespace(returncode=1, stdout=json.dumps(payload), stderr="Fixture scanner diagnostic")  # Findings are a successful scanner exit.
+    monkeypatch.setattr("security_monitoring_agent.intelligence.dependencies.run_process", fake_process)  # Replace only the native process boundary.
+    settings = Settings(project_roots=[ProjectRoot(kind="wsl", distribution=distribution, path=path) for path in paths], timeout_seconds=600)  # No automatic discovery or Windows path translation.
+    assets, advisories, findings, coverage = await scan_projects(settings, tmp_path, lambda *_: None)  # Exercise selection, invocation, parsing, and coverage in one wrapper call.
+    for (args, options), path in zip(calls, paths, strict=True):  # Each configured root gets exactly one scoped invocation.
+        assert args == ["wsl.exe", "--distribution", distribution, "--exec", "osv-scanner", "scan", "source", "--format=json", "--all-packages", "--no-call-analysis=go", "--no-resolve", "--recursive", path]  # Documented non-mutating scanner flags and values are separate literal arguments.
+        assert options["cwd"] == tmp_path and options["timeout"] == 300  # The Windows caller cwd and five-minute project bound are explicit.
+    assert len(calls) == len(assets) == len(advisories) == len(findings) == len(coverage) == 2  # No configured project is silently skipped.
+    assert len({asset.id for asset in assets}) == 2 and {finding.asset_id for finding in findings} == {asset.id for asset in assets}  # Identical packages in distinct projects stay separate occurrences.
+    assert all(asset.platform == f"WSL:{distribution}" for asset in assets)  # A Linux project is never mislabeled as a Windows dependency.
+    assert {asset.location for asset in assets} == {path + "/uv.lock" for path in paths}  # Keep exact source paths for applicability evidence.
+    assert all(item.status == "ok" and item.asset_count == 1 for item in coverage)  # Both scopes report their actual successful package count.

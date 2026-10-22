@@ -22,6 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware  # Reject arb
 
 from .config import load_settings, save_settings  # UI edits use the same dotenv config as the CLI.
 from .diagnostics import diagnostics  # Read-only runtime probes.
+from .intelligence.news import is_recent_advisory  # Preserve timestamp precision and honest calendar-only source dates.
 from .models import Contract, RunEvent, Settings  # Keep public request and event shapes strict.
 from .api_models import CancellationResponse, Conversation, ConversationDetail, DashboardStatus, InventorySnapshot, RunRecord, StoredAdvisory, StoredFinding  # Named responses document the local API.
 from .service import BusyError, Monitor  # No scan logic lives in HTTP route functions.
@@ -111,9 +112,9 @@ def create_app(root: Path | None = None) -> FastAPI:
         """Global: recent intelligence view. Local: preserve separately recorded publication/addition dates."""
         if news_days is not None and news_days not in {1, 7, 30}:  # Query integers are parsed before restricting the supported window choices.
             raise HTTPException(422, "news_days must be 1, 7, or 30")  # Do not silently reinterpret an unsupported interval.
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=news_days or load_settings(root).news_days)).isoformat()[:10]  # Quick filters do not mutate saved defaults.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=news_days or load_settings(root).news_days)  # Keep the exact rolling cutoff without mutating saved defaults.
         rows = monitor.store.advisories()  # Storage retains the complete baseline regardless of this view.
-        return [row for row in rows if max([row.get(field, "")[:10] for field in ("published_at", "modified_at", "kev_added_at") if row.get(field)] or [row["observed_at"][:10]]) >= cutoff]  # Corrected or newly exploited older disclosures can be news.
+        return [row for row in rows if is_recent_advisory(row, cutoff)]  # Source dates and fallback observation retain their actual time precision.
 
     @app.get("/api/inventory", response_model=InventorySnapshot | None)
     async def inventory():
@@ -187,7 +188,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def update_settings(body: Settings):
         """Global: persist user changes. Local: reconcile optional Windows tasks only when needed."""
         previous = load_settings(root)  # Avoid re-registering tasks on unrelated model edits.
-        fields = ("schedule_mode", "interval_minutes", "auto_scan")  # Changes that affect Windows triggers.
+        fields = ("schedule_mode", "interval_minutes", "auto_scan", "timeout_seconds")  # Reconcile triggers and the task execution limit derived from the agent timeout.
         if any(getattr(previous, field) != getattr(body, field) for field in fields) and (body.schedule_mode != "app" or previous.schedule_mode != "app"):  # Default mode never touches Task Scheduler.
             from .scheduling import configure_schedule  # Keep optional Windows integration isolated.
             try:  # Failed registration must not advertise a schedule that does not exist.
