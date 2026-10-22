@@ -58,6 +58,11 @@ export function select(options, value, attributes = {}) {
   return node; // Hand control ownership back to the form.
 }
 
+export function filterSelect(label, options) {
+  // Global: consistent optional filtering. Local: every select starts with an explicit all-results choice.
+  return select([["all", label], ...options], "all", { "aria-label": label }); // Reuse the accessible native select implementation.
+}
+
 export async function copy(text, target) {
   // Global: proposed fixes are copyable only. Local: use the browser clipboard without executing commands; https://developer.mozilla.org/en-US/docs/Web/API/Clipboard/writeText.
   try { await navigator.clipboard.writeText(text); target.textContent = "Copied"; setTimeout(() => { target.textContent = "Copy"; }, 1800); } // Confirm successful copying briefly.

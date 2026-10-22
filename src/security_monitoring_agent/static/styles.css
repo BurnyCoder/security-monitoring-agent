@@ -103,6 +103,9 @@ main { max-width:1800px; margin:auto; padding:32px 34px 18px; }
 .panel-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:19px 20px 17px; border-bottom:1px solid #edf0eb; }
 .panel-heading p { margin:5px 0 0; color:#8e9992; font-size:10px; line-height:1.5; }
 .panel-footer { border-top:1px solid #eef1ed; padding:12px 18px; }
+.activity-footer { display:flex; justify-content:space-between; gap:8px; align-items:center; } /* Global: preserve full-log access. Local: raw-event inspection sits beside its download link. */
+.activity-toggle { display:flex; align-items:center; gap:4px; white-space:nowrap; font-size:9px; color:#7d8f80; cursor:pointer; } /* Global: readable default activity. Local: a native checkbox exposes the raw stream without altering stored logs. */
+.activity-toggle input { margin:0; padding:0; accent-color:var(--teal); } /* Global: native keyboard interaction. Local: reuse the dashboard accent for the optional event filter. */
 .muted { color:var(--muted); }
 .nowrap { white-space:nowrap; }
 .break-word { overflow-wrap:anywhere; }
@@ -164,6 +167,9 @@ tbody tr:hover { background:#fbfcf9; }
 .source-links a { font-size:9px; color:#6d957b; overflow-wrap:anywhere; }
 .line-clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .filter-toolbar { display:flex; gap:12px; padding:17px 20px; border-bottom:1px solid var(--line); }
+.findings-filters { flex-wrap:wrap; } /* Global: complete triage controls. Local: six controls wrap without forcing the entire page to scroll horizontally. */
+.findings-filters .search-input { flex:1 1 100%; max-width:none; } /* Global: visible search. Local: the search occupies its own row above the narrower categorical filters. */
+.findings-filters select { flex:1 1 155px; } /* Global: responsive filters. Local: native selects share the remaining row width and wrap on small screens. */
 .search-input { flex:1; max-width:430px; }
 .filter-toolbar input,.filter-toolbar select { font-size:11px; }
 .coverage-grid { padding:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:13px; }

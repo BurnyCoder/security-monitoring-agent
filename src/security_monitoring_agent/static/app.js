@@ -6,7 +6,8 @@ import { settingsView } from "./settings.js"; // Isolate configuration form logi
 import { chatView } from "./chat.js"; // Isolate persisted conversation logic.
 
 const pages = { overview: ["Overview", "Security overview", "Fresh intelligence. Local evidence. A clear next step."], findings: ["Device findings", "Device findings", "Understand which vulnerabilities apply to your installed software."], intelligence: ["Threat intelligence", "Threat intelligence", "New vulnerabilities, exploitation reports, and the sources behind them."], inventory: ["Device inventory", "Device inventory", "Inspect exactly what was observed across Windows, WSL, and your projects."], history: ["Scan history", "Investigation history", "Trace each investigation from its first command to its final assessment."], chat: ["Ask an agent", "Ask your security agent", "Go deeper on the evidence, a proposed fix, or a question about your device."], settings: ["Settings", "Workspace settings", "Your agent, your schedule, and the scope of your investigations."] }; // Keep route copy in one place.
-const state = { status: null, settings: null, stream: null, streamId: null, logRunId: null, events: [], seen: new Set(), route: "overview", version: 0, chatId: null, findingId: null, busy: false, statusBusy: false, initialized: false, paintTimer: null }; // Keep only necessary view and live-run state.
+const humanEventKinds = new Set(["phase", "progress", "agent_text", "agent_result", "state", "error", "done", "source"]); // Show readable investigation milestones by default; raw process streams remain available separately.
+const state = { status: null, settings: null, stream: null, streamId: null, logRunId: null, events: [], humanEvents: [], seen: new Set(), route: "overview", version: 0, chatId: null, findingId: null, busy: false, statusBusy: false, initialized: false, paintTimer: null }; // Keep only necessary view and live-run state.
 
 function showError(error) {
   // Global: visible failures. Local: never insert exception text as HTML.
@@ -35,8 +36,9 @@ function paintActivity() {
   // Global: live readable investigation trace. Local: the visible tail is bounded while the downloadable log remains complete.
   const log = document.querySelector("#activity-log"); if (!log) return; // Other routes do not own an activity pane.
   const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80; // Preserve a user's position while they inspect earlier events.
-  if (!state.events.length) log.replaceChildren(el("div", { class: "activity-empty" }, el("span", { class: "activity-empty-icon", "aria-hidden": "true" }, "⌁"), el("strong", {}, state.status?.active_run ? "Waiting for the next event" : "A live view of your investigation"), el("p", {}, "Inventory checks, web research, and agent updates appear here during a run."))); // Distinguish no events from an error.
-  else log.replaceChildren(...state.events.slice(-160).map((event) => el("div", { class: `activity-event${event.kind === "error" ? " event-error" : ""}` }, el("div", { class: "activity-event-meta" }, el("span", {}, event.kind || "activity"), el("time", {}, event.created_at ? new Date(event.created_at).toLocaleTimeString(undefined, { hour12: false }) : "")), el("pre", {}, event.text || "")))); // Show complete event text inside the visible tail.
+  const visible = document.querySelector("#activity-raw")?.checked ? state.events : state.humanEvents; // Raw stdout, stderr, and prompts are opt-in; both tails contain complete events.
+  if (!visible.length) log.replaceChildren(el("div", { class: "activity-empty" }, el("span", { class: "activity-empty-icon", "aria-hidden": "true" }, "⌁"), el("strong", {}, state.status?.active_run ? "Waiting for the next update" : "A live view of your investigation"), el("p", {}, "Inventory checks, web research, and agent updates appear here. Enable Raw events or download the full log for process output."))); // Explain how to inspect hidden transport events without presenting them as findings.
+  else log.replaceChildren(...visible.slice(-160).map((event) => el("div", { class: `activity-event${event.kind === "error" ? " event-error" : ""}` }, el("div", { class: "activity-event-meta" }, el("span", {}, event.kind || "activity"), el("time", {}, event.created_at ? new Date(event.created_at).toLocaleTimeString(undefined, { hour12: false }) : "")), el("pre", {}, event.text || "")))); // Show complete event text inside the selected visible tail.
   if (nearBottom) log.scrollTop = log.scrollHeight; // Follow live output only while the reader stays near the end.
   const download = document.querySelector("#activity-download"); if (download) { download.hidden = !state.logRunId; if (state.logRunId) { download.href = `/api/runs/${encodeURIComponent(state.logRunId)}/log`; download.setAttribute("download", ""); } } // Full prompt and output logs remain one click away.
 }
@@ -45,11 +47,12 @@ function followRun(run) {
   // Global: one stream per active run. Local: deduplicate replayed IDs after native EventSource reconnects.
   if (state.streamId === run.id) return; // Polling status must not reopen the same stream.
   state.stream?.close(); state.streamId = run.id; // Close a previous stream before switching the cursor.
-  if (state.logRunId !== run.id) { state.logRunId = run.id; state.events = []; state.seen.clear(); } // Give each run its own visible log tail.
+  if (state.logRunId !== run.id) { state.logRunId = run.id; state.events = []; state.humanEvents = []; state.seen.clear(); } // Give each run its own raw and readable log tails.
   state.stream = streamRun(run.id, (event) => { // All event types are rendered as progress text.
     if (event.id !== undefined && state.seen.has(String(event.id))) return; // Avoid duplicate log lines after reconnect.
     if (event.id !== undefined) state.seen.add(String(event.id)); state.events.push(event); // Track the server event identity.
     if (state.events.length > 200) state.events.shift(); // Bound browser memory without truncating persisted logs.
+    if (humanEventKinds.has(event.kind)) { state.humanEvents.push(event); if (state.humanEvents.length > 160) state.humanEvents.shift(); } // Frequent raw diagnostics cannot evict readable milestones from their independent tail.
     if (state.seen.size > 2000) state.seen = new Set(state.events.map((item) => String(item.id))); // Bound reconnect bookkeeping during long sessions.
     if (!state.paintTimer) state.paintTimer = setTimeout(() => { state.paintTimer = null; paintActivity(); }, 120); // Batch rapid streaming events without delaying persisted full logs.
   });
@@ -85,7 +88,7 @@ async function renderRoute() {
     else if (state.route === "history") content = historyView(await request("/runs"), actions); // Include failed investigations and full logs.
     else if (state.route === "settings") content = settingsView(await request("/settings"), actions); // Use persisted values rather than stale quick-control overrides.
     else if (state.route === "chat") content = await chatView(state.settings, actions, state.chatId, state.findingId); // Preserve explicit conversation identity across navigation.
-    if (version !== state.version) return; target.replaceChildren(content); paintActivity(); // Ignore outdated route responses.
+    if (version !== state.version) return; target.replaceChildren(content); document.querySelector("#activity-raw")?.addEventListener("change", paintActivity); paintActivity(); // Ignore outdated route responses and bind the newly mounted raw-event toggle.
   } catch (error) { if (version === state.version) { target.replaceChildren(empty("This view could not be loaded", error.message)); showError(error); } } // Failure stays recoverable through navigation or refresh.
   finally { if (version === state.version) target.classList.remove("is-loading"); } // Do not alter a newer route's loading state.
 }

@@ -1,7 +1,25 @@
 // Global: evidence-driven dashboard views. Local: compose escaped DOM nodes from API contracts; https://developer.mozilla.org/en-US/docs/Web/API/Node/textContent.
-import { el, button, badge, date, empty, panel, sourceLinks, select, copy } from "./ui.js"; // Share rendering primitives across views.
+import { el, button, badge, date, empty, panel, sourceLinks, select, filterSelect, copy } from "./ui.js"; // Share rendering primitives across views.
 
 const riskOrder = { critical: 0, high: 1, medium: 2, low: 3, unknown: 4 }; // Consistently prioritize source-backed severity.
+
+function findingScope(finding) {
+  // Global: separate OS installations from recorded project dependencies. Local: classify explicit asset kinds before platform labels.
+  const kind = finding.asset?.kind || ""; // Missing assets stay unclassified rather than inferred from an advisory.
+  if (kind === "project_dependency") return "project"; // A project dependency remains a project finding on Windows and WSL alike.
+  if (kind.startsWith("wsl_") || /^WSL\b/i.test(finding.asset?.platform || "")) return "wsl"; // Named distributions belong to the WSL scope.
+  if (kind.startsWith("windows_") || /^Windows\b/i.test(finding.asset?.platform || "")) return "windows"; // Native OS/application assets belong to Windows.
+  return "unknown"; // Unknown scope remains visible through the all/unclassified choices.
+}
+
+function findingSourceHosts(finding) {
+  // Global: filter by actual cited provenance. Local: derive source domains from both assessment and advisory citations; https://developer.mozilla.org/en-US/docs/Web/API/URL/hostname.
+  const hosts = new Set(); // One source domain appears once even when several URLs support a finding.
+  for (const source of [...(finding.sources || []), ...(finding.advisory?.sources || [])]) { // Include both applicability and general vulnerability evidence.
+    try { const url = new URL(source.url); if (url.protocol === "http:" || url.protocol === "https:") hosts.add(url.hostname.replace(/^www\./, "")); } catch { /* A malformed source cannot break the triage view. */ }
+  }
+  return [...hosts]; // Stable domain values are suitable for native select options.
+}
 
 export function metrics(status) {
   // Global: honest at-a-glance counts. Local: missing counts become zero, without implying a clean device.
@@ -26,7 +44,7 @@ export function overview(data, actions) {
   const summary = data.status.last_successful?.summary; // A successful run summary is evidence, not a marketing claim.
   const lastScan = el("div", { class: "scan-summary" }, el("span", { class: "summary-icon", "aria-hidden": "true" }, active ? "◌" : "◎"), el("div", {}, el("strong", {}, active ? "An investigation is in progress" : data.status.last_successful ? "Latest investigation" : "Your first scan starts here"), el("p", {}, active ? `${active.provider} · ${active.model} · Started ${date(active.started_at)}` : summary || "Sentinel checks installed software, searches fresh sources, and explains which findings apply to this device.")), el("a", { href: "#history", class: "text-link" }, "View history ↗")); // Keep the introductory state useful before any run.
   const activity = panel("Live activity", "Follow your agent's investigation", el("div", { id: "activity-log", class: "activity-log", role: "log", "aria-live": "polite" }), el("span", { id: "activity-indicator", class: active ? "live-pill" : "quiet-pill" }, active ? "LIVE" : "READY")); // App orchestration fills this log from SSE.
-  activity.append(el("div", { class: "panel-footer" }, el("a", { id: "activity-download", class: "text-link", hidden: true }, "Download full log ↗"))); // Full logs stay accessible beyond the visible tail.
+  activity.append(el("div", { class: "panel-footer activity-footer" }, el("a", { id: "activity-download", class: "text-link", hidden: true }, "Download full log ↗"), el("label", { class: "activity-toggle" }, el("input", { id: "activity-raw", type: "checkbox" }), "Raw events"))); // Human-readable activity is the default; complete logs and raw event inspection remain accessible.
   const coverageCard = panel("Monitoring coverage", "What this device scan can see", coverage.length ? el("div", { class: "coverage-mini" }, coverage.slice(0, 5).map((item) => el("div", {}, el("span", {}, item.component), badge(item.status))), el("div", { class: "coverage-total" }, `${covered} of ${coverage.length} collectors fully covered`, el("a", { href: "#inventory" }, "Inspect coverage ↗"))) : el("div", { class: "quiet-empty" }, "Inventory is collected when the first scan starts.", el("a", { href: "#settings" }, "Choose project folders ↗"))); // Failed collectors remain discoverable.
   return el("div", {}, metrics(data.status), lastScan, el("div", { class: "overview-grid" }, el("div", { class: "main-column" }, panel("Device findings", "Vulnerabilities assessed against your installed software", findingTable(data.findings, actions, true), el("a", { href: "#findings", class: "text-link" }, "View all ↗")), panel("Intelligence watch", "Recent advisories and exploitation reports", newsList(data.advisories.slice(0, 3), true), el("a", { href: "#intelligence", class: "text-link" }, "Explore ↗"))), el("div", { class: "side-column" }, activity, coverageCard))); // Establish one primary findings column and one activity column.
 }
@@ -34,23 +52,28 @@ export function overview(data, actions) {
 export function findingsView(findings, actions) {
   // Global: focused triage workflow. Local: client filters operate on the complete server response.
   const search = el("input", { type: "search", placeholder: "Search CVE, product, or platform…", "aria-label": "Search findings", class: "search-input" }); // Native search supports quick clearing.
-  const assessment = select([["all", "All assessments"], ["affected", "Affected"], ["potentially_affected", "Potentially affected"], ["unknown", "Unknown"], ["not_affected", "Not affected"]], "all", { "aria-label": "Filter assessment" }); // Expose definitive and uncertain states separately.
-  const severity = select([["all", "All severities"], ...Object.keys(riskOrder).map((key) => [key, key[0].toUpperCase() + key.slice(1)])], "all", { "aria-label": "Filter severity" }); // Match the shared severity vocabulary.
+  const records = findings.map((finding) => ({ finding, scope: findingScope(finding), hosts: findingSourceHosts(finding), text: [finding.advisory_id, finding.advisory?.title, finding.asset?.name, finding.asset?.platform].join(" ").toLowerCase() })); // Compute reusable filter metadata once per loaded response.
+  const assessment = filterSelect("All assessments", [["affected", "Affected"], ["potentially_affected", "Potentially affected"], ["unknown", "Unknown"], ["not_affected", "Not affected"]]); // Expose definitive and uncertain states separately.
+  const severity = filterSelect("All severities", Object.keys(riskOrder).map((key) => [key, key[0].toUpperCase() + key.slice(1)])); // Match the shared severity vocabulary.
+  const exploitation = filterSelect("All exploitation evidence", [["known_exploited", "Known exploited"], ["public_poc", "Public proof of concept"], ["unverified_report", "Unverified report"], ["none_known", "No known exploit"]]); // Distinguish reported exploitation from published PoCs and absent reports.
+  const scope = filterSelect("All installation scopes", [["windows", "Windows"], ["wsl", "WSL"], ["project", "Project dependencies"], ["unknown", "Unclassified"]]); // Use observed installation identity, not product-name guesses.
+  const sourceHosts = [...new Set(records.flatMap((record) => record.hosts))].sort(); // Build source choices only from actual citations.
+  const source = filterSelect("All cited sources", [...sourceHosts.map((host) => [host, host]), ["uncited", "No cited source"]]); // Keep uncited assessments explicitly discoverable.
   const content = el("div"); // Replace only the filtered table, preserving input focus.
   const render = () => { // Global: predictable filters. Local: include source identity and installed product fields.
     const term = search.value.trim().toLowerCase(); // Normalize user text without changing source text.
-    const filtered = findings.filter((finding) => (!term || [finding.advisory_id, finding.advisory?.title, finding.asset?.name, finding.asset?.platform].join(" ").toLowerCase().includes(term)) && (assessment.value === "all" || finding.status === assessment.value) && (severity.value === "all" || finding.advisory?.severity === severity.value)); // Apply independent filters together.
-    content.replaceChildren(filtered.length ? findingTable(filtered, actions) : empty(findings.length ? "No matching findings" : "No findings yet", findings.length ? "Try another product, assessment, or severity." : "Run a scan to collect local evidence and assess vulnerabilities.")); // Distinguish no results from an unscanned device.
+    const filtered = records.filter((record) => (!term || record.text.includes(term)) && (assessment.value === "all" || record.finding.status === assessment.value) && (severity.value === "all" || record.finding.advisory?.severity === severity.value) && (exploitation.value === "all" || record.finding.advisory?.exploitation === exploitation.value) && (scope.value === "all" || record.scope === scope.value) && (source.value === "all" || (source.value === "uncited" ? !record.hosts.length : record.hosts.includes(source.value)))).map((record) => record.finding); // Combine every selected constraint without changing the underlying evidence.
+    content.replaceChildren(filtered.length ? findingTable(filtered, actions) : empty(findings.length ? "No matching findings" : "No findings yet", findings.length ? "Adjust the search, assessment, severity, exploitation, installation scope, or source filters." : "Run a scan to collect local evidence and assess vulnerabilities.")); // Distinguish no results from an unscanned device.
   };
-  [search, assessment, severity].forEach((control) => control.addEventListener("input", render)); // Native input handles keyboard and pointer changes.
+  [search, assessment, severity, exploitation, scope, source].forEach((control) => control.addEventListener("input", render)); // Native input handles keyboard and pointer changes across every filter.
   render(); // Populate the initial unfiltered view.
-  return panel("All device findings", `${findings.length} installation assessments`, el("div", {}, el("div", { class: "filter-toolbar" }, search, assessment, severity), content)); // Keep filter controls adjacent to their results.
+  return panel("All device findings", `${findings.length} installation assessments`, el("div", {}, el("div", { class: "filter-toolbar findings-filters" }, search, assessment, severity, exploitation, scope, source), content)); // Keep all filter controls adjacent to their results.
 }
 
 export function newsList(advisories, compact = false) {
   // Global: distinguish intelligence from applicability. Local: news alone never labels this device affected.
   if (!advisories.length) return empty("Intelligence will appear here", "Your selected agent searches the web during each scan. Advisories include source links and exploitation evidence."); // No fabricated sample threats.
-  return el("div", { class: "news-list" }, advisories.map((advisory) => el("article", { class: "news-item" }, el("div", { class: "news-topline" }, el("span", { class: "finding-id" }, advisory.id), badge(advisory.severity), advisory.exploitation !== "none_known" ? badge(advisory.exploitation) : null), el("h3", {}, advisory.title), el("p", { class: compact ? "line-clamp" : "" }, advisory.summary), !compact ? el("div", { class: "news-dates muted" }, `Published ${date(advisory.published_at)} · Observed ${date(advisory.observed_at)}`, advisory.kev_added_at ? ` · KEV added ${date(advisory.kev_added_at)}` : "") : null, sourceLinks(advisory.sources)))); // Keep provenance beside each claim.
+  return el("div", { class: "news-list" }, advisories.map((advisory) => el("article", { class: "news-item" }, el("div", { class: "news-topline" }, el("span", { class: "finding-id" }, advisory.id), badge(advisory.severity), advisory.exploitation !== "none_known" ? badge(advisory.exploitation) : null), el("h3", {}, advisory.title), el("p", { class: compact ? "line-clamp" : "" }, advisory.summary), !compact ? el("div", { class: "news-dates muted" }, `Published ${date(advisory.published_at)} · Modified ${date(advisory.modified_at)} · Observed ${date(advisory.observed_at)}`, advisory.kev_added_at ? ` · KEV added ${date(advisory.kev_added_at)}` : "") : null, sourceLinks(advisory.sources)))); // Keep provenance and each distinct date beside its claim.
 }
 
 export function inventoryView(inventory) {
