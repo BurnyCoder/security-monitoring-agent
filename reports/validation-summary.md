@@ -26,7 +26,7 @@ Pre-implementation acceptance criteria concerned reproducible behavior: reject u
 
 ## Results: software checks and Luna
 
-The observed final local software check was **88 passing tests** in 8.46 seconds. All six frontend modules parsed and linked. The Windows CI run for the earlier commit e92a2c1 also completed successfully. Tests cover backport-sensitive prompts/evidence, incomplete Windows update data, separate installations, scanner exit codes, unavailable sources, alias consolidation, invalid results, long events, concurrent stderr, timeouts, process-tree cancellation, restart recovery, scan-lock collisions, and primary WSL range contradictions with matching news caveats. These are behavioral assertions, not a count of real vulnerabilities detected.
+The completion-audit local check was **117 passing tests** in 10.67 seconds, following the initial release's 88-case suite. All six frontend modules parsed and linked. Windows CI passed for the earlier merged release 0afd91e. Tests cover evidence boundaries, source failures, identity consolidation, process/stream lifecycle, primary WSL contradictions, exact news timestamps, explicit chat sessions, Windows task timeout updates, and actual timer-loop collision/coalescing. These are behavioral assertions, not a count of real vulnerabilities detected.
 
 The Luna run requested `gpt-6-luna`, completed its original research in 965.773 seconds, and emitted 23 distinct web-tool IDs. That count includes web operations and does not count independent queries. The final JSON contained 12 advisories and 15 proposed findings. Exact asset binding rejected one identifier with a missing character, retaining 14 findings: four affected, four potentially affected, and six not affected. Replaying the unchanged output through the corrected publication gate changed the recorded workflow status to partial; it did not perform new research.
 
@@ -54,6 +54,8 @@ The source spot checks were chosen after viewing the output and are not statisti
 
 ## Conclusion and reproducibility
 
+A subsequent requirement audit found and fixed five boundary defects: partial scans advancing a successful-research cursor, current-response aliases losing findings, timeout edits leaving an old Windows task limit, missing/changed chat session identities, and calendar-only filtering of timestamped 24-hour news. Added tests also cover official KEV fallback failures and literal WSL project arguments. The audit removed the local legacy checkpoint because both recorded scans are partial; original findings and transcripts remain intact. The detailed requirement matrix records remaining live-validation limits [11].
+
 The evidence supports a practical local integration: inventory and dependency collection, real agent research, structured findings, durable history, proposed fixes, and session-bound follow-up. It also directly shows why users must inspect citations and uncertainty. Clone the public repository, follow its setup guide, and use the locked uv environment. Automated checks require no model credentials; live scans require the selected authenticated CLI and network access. The detailed sanitized records identify observed runs, corrections, and remaining gaps. The PDF is generated from this Markdown with the repository's ReportLab script.
 
 ## References and related implementations
@@ -68,3 +70,4 @@ The evidence supports a practical local integration: inventory and dependency co
 - [8] GitHub Security Lab: [GHSL-2026-140](https://securitylab.github.com/advisories/GHSL-2026-140_7-Zip/).
 - [9] [Repository, source code, tests, and detailed validation records](https://github.com/BurnyCoder/security-monitoring-agent).
 - [10] Microsoft CNA records in the official CVE Program repository: [CVE-2026-57968](https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/57xxx/CVE-2026-57968.json) and [CVE-2026-57973](https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/57xxx/CVE-2026-57973.json).
+- [11] [Approved-plan completion audit and regression evidence](https://github.com/BurnyCoder/security-monitoring-agent/blob/main/reports/05-plan-completion-audit.md).

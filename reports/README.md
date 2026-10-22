@@ -9,6 +9,7 @@ Author: Libor Burian. These are engineering integration experiments on one Windo
 | [Haiku full scan](02-haiku-scan.md) | Can the second provider complete the same inventory-to-dashboard workflow? | Independent live run through the dashboard; coverage and source review. |
 | [Browser and operations](03-browser-operations.md) | Can a user navigate findings, copy proposed commands, reconnect, and inspect settings? | Actual local browser interactions, responsive views, restart, and scheduling checks. |
 | [Primary-source regression](04-primary-source-regression.md) | Can contradictory Microsoft WSL ranges automatically qualify definitive claims? | Fixture tests plus a live-source replay of the unchanged Haiku result. |
+| [Plan completion audit](05-plan-completion-audit.md) | Does every approved requirement have an implementation and appropriately bounded validation evidence? | Requirement matrix, follow-up regressions, and explicit remaining validation limits. |
 | [Concise report source](validation-summary.md) / [PDF](validation-report.pdf) | What do these observations establish, and what remains untested? | Sanitized synthesis with explicit limits. |
 
 ## Terms and scope

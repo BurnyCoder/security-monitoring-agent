@@ -4,6 +4,8 @@ Author: Libor Burian
 Validation date: 2026-10-22, Europe/Berlin  
 Scope: repository working tree, automated integration behavior and one focused code review. This record contains synthetic test outcomes and sanitized implementation observations, not device inventory, account details, credentials, or raw agent transcripts.
 
+This records the initial release checks. The subsequent [plan completion audit](05-plan-completion-audit.md) records additional corrections and the newer 117-case suite.
+
 ## Question, hypothesis, and acceptance criteria
 
 The engineering question is whether the local pipeline preserves explicit evidence and run state across configuration, subprocesses, storage, HTTP streaming, and frontend module loading. The hypothesis is that the implemented boundaries behave according to their contracts under the tested success, failure, cancellation, and reconnect scenarios. A failed assertion, malformed frontend module, lost event payload, leaked owned test process, or incorrect identity merge falsifies that hypothesis for its specific scenario.
