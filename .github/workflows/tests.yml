@@ -23,7 +23,7 @@ jobs: # One native Windows environment matches the production process lifecycle.
       - name: Install uv and Python # uv creates the repository-local .venv from the lockfile.
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0; official uv setup action.
         with: # Pin the package manager and requested interpreter family.
-          version: "0.13.5" # Version published in the current official integration guide.
+          version: "0.13.5" # Pinned uv release; the official integration guide shows its current example version.
           python-version: "3.14" # Match the application's validated Windows interpreter family.
       - name: Install locked dependencies # Fail instead of silently rewriting a stale lockfile.
         run: uv sync --locked # Includes the default development dependency group.
